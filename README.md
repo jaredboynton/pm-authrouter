@@ -1,6 +1,6 @@
 # Postman AuthRouter (Go)
 
-Enterprise authentication enforcement for Postman Desktop applications.
+Enterprise authentication (SAML) enforcement for Postman Desktop Enterprise.
 
 ## Project Structure
 
