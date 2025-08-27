@@ -1,0 +1,293 @@
+{
+  "version": "1.0.0",
+  "description": "Unified cross-platform test configuration for Postman SAML Enforcer",
+  "platforms": {
+    "windows": {
+      "name": "Windows",
+      "runner": "test/windows/Run-WindowsTests.ps1",
+      "executor": "powershell",
+      "supported_versions": ["Windows 10", "Windows 11", "Windows Server 2019", "Windows Server 2022"],
+      "requirements": {
+        "powershell": "5.1+",
+        "pester": "3.4.0-5.x",
+        "wix": "3.11+",
+        "go": "1.19+",
+        "admin_required": true
+      }
+    },
+    "unix": {
+      "name": "Unix/Linux",
+      "runner": "test/unix/run_unix_tests.sh", 
+      "executor": "bash",
+      "supported_versions": ["macOS 10.15+", "Ubuntu 20.04+", "CentOS 8+", "RHEL 8+"],
+      "requirements": {
+        "bash": "4.0+",
+        "msitools": "0.97+",
+        "openssl": "1.1.1+",
+        "go": "1.19+",
+        "root_preferred": true
+      }
+    }
+  },
+  "test_categories": {
+    "smoke": {
+      "description": "Critical functionality validation (~30 seconds)",
+      "timeout_minutes": 1,
+      "tags": ["Fast", "Critical"],
+      "windows_suites": ["Build"],
+      "unix_suites": ["build_validation"],
+      "parallel_jobs": 1
+    },
+    "fast": {
+      "description": "Unit tests and quick validation (~2 minutes)",
+      "timeout_minutes": 3,
+      "tags": ["Fast", "Unit"],
+      "windows_suites": ["Build", "Validation"],
+      "unix_suites": ["build_validation", "dependency_validation"],
+      "parallel_jobs": 2
+    },
+    "component": {
+      "description": "Component and integration testing (~5 minutes)",
+      "timeout_minutes": 8,
+      "tags": ["Fast", "Unit", "Medium", "Component"],
+      "windows_suites": ["Build", "Validation", "Functionality", "EdgeCases"],
+      "unix_suites": ["build_validation", "dependency_validation", "platform_specific", "msi_structure"],
+      "parallel_jobs": 3
+    },
+    "full": {
+      "description": "Complete test coverage (~15+ minutes)",
+      "timeout_minutes": 30,
+      "tags": [],
+      "windows_suites": ["Build", "Validation", "Functionality", "BrowserCleanup", "EdgeCases", "DNSInterception", "ServiceRecovery", "SystemIntegration"],
+      "unix_suites": ["build_validation", "build_consistency", "platform_specific", "dependency_validation", "msi_structure", "idt_validation", "regression_testing"],
+      "parallel_jobs": 4
+    }
+  },
+  "test_suites": {
+    "windows": {
+      "Build": {
+        "name": "MSI Build Tests (WiX 3.11)",
+        "script": "Test-BuildMsiWix3.ps1",
+        "description": "Tests MSI build process with WiX 3.11 and validation framework",
+        "tags": ["Fast", "Build"],
+        "requires_msi": false,
+        "requires_admin": false,
+        "estimated_duration": 90
+      },
+      "Validation": {
+        "name": "MSI Validation Framework Tests",
+        "script": "Test-MsiValidation.ps1", 
+        "description": "Tests 5-phase validation system and build prerequisites",
+        "tags": ["Fast", "Unit"],
+        "requires_msi": true,
+        "requires_admin": false,
+        "estimated_duration": 60
+      },
+      "Functionality": {
+        "name": "AuthRouter Functionality Tests",
+        "script": "Test-AuthRouterFunctionality.ps1",
+        "description": "Tests Windows service operations and SAML enforcement",
+        "tags": ["Medium", "Component"],
+        "requires_msi": true,
+        "requires_admin": true,
+        "estimated_duration": 180
+      },
+      "BrowserCleanup": {
+        "name": "Browser Session Cleanup Tests",
+        "script": "Test-BrowserSessionCleanup.ps1",
+        "description": "Tests browser session cleanup functionality",
+        "tags": ["Medium", "Component"],
+        "requires_msi": false,
+        "requires_admin": false,
+        "estimated_duration": 120
+      },
+      "EdgeCases": {
+        "name": "Edge Case Tests",
+        "script": "Test-BuildEdgeCases.ps1",
+        "description": "Tests error handling and edge cases",
+        "tags": ["Medium", "Component"],
+        "requires_msi": false,
+        "requires_admin": false,
+        "estimated_duration": 90
+      },
+      "DNSInterception": {
+        "name": "DNS Interception Methods Tests",
+        "script": "Test-DNSInterceptionMethods.ps1",
+        "description": "Tests all Windows DNS interception methods",
+        "tags": ["Slow", "Integration"],
+        "requires_msi": false,
+        "requires_admin": true,
+        "estimated_duration": 240
+      },
+      "ServiceRecovery": {
+        "name": "Service Recovery Tests",
+        "script": "Test-ServiceRecovery.ps1",
+        "description": "Tests service crash recovery and restart scenarios",
+        "tags": ["Slow", "Integration"],
+        "requires_msi": true,
+        "requires_admin": true,
+        "estimated_duration": 300
+      },
+      "SystemIntegration": {
+        "name": "System Integration Tests",
+        "script": "Test-SystemIntegration.ps1",
+        "description": "End-to-end integration tests for the complete system",
+        "tags": ["Slow", "Integration"],
+        "requires_msi": true,
+        "requires_admin": true,
+        "estimated_duration": 360
+      }
+    },
+    "unix": {
+      "build_validation": {
+        "name": "Unix Build Script Validation Tests",
+        "script": "test_build_validation.sh",
+        "description": "Comprehensive testing of build_msi_mdm_unix.sh functionality and validation phases",
+        "tags": ["Fast", "Build"],
+        "requires_original_msi": false,
+        "requires_root": false,
+        "estimated_duration": 120
+      },
+      "build_consistency": {
+        "name": "Unix vs Windows Build Consistency Tests",
+        "script": "test_build_consistency.sh", 
+        "description": "Validates that Unix-built MSIs are functionally identical to Windows-built ones",
+        "tags": ["Medium", "Component"],
+        "requires_original_msi": true,
+        "requires_root": false,
+        "estimated_duration": 240
+      },
+      "platform_specific": {
+        "name": "Platform-Specific Build Environment Tests",
+        "script": "test_platform_specific.sh",
+        "description": "Tests macOS/Linux specific build environment and dependency management",
+        "tags": ["Fast", "Unit"],
+        "requires_original_msi": false,
+        "requires_root": false,
+        "estimated_duration": 90
+      },
+      "dependency_validation": {
+        "name": "Dependency Management Validation Tests",
+        "script": "test_dependency_validation.sh",
+        "description": "Tests automatic dependency installation and validation across platforms",
+        "tags": ["Fast", "Unit"],
+        "requires_original_msi": false,
+        "requires_root": true,
+        "estimated_duration": 180
+      },
+      "msi_structure": {
+        "name": "MSI Structure and Integrity Tests",
+        "script": "test_msi_structure.sh",
+        "description": "Tests MSI internal structure, cabinet content, and integrity validation",
+        "tags": ["Medium", "Component"],
+        "requires_original_msi": true,
+        "requires_root": false,
+        "estimated_duration": 150
+      },
+      "idt_validation": {
+        "name": "IDT Schema and Relationship Tests",
+        "script": "test_idt_validation.sh",
+        "description": "Tests IDT table schema validation and cross-table relationship integrity",
+        "tags": ["Slow", "Integration"],
+        "requires_original_msi": true,
+        "requires_root": false,
+        "estimated_duration": 300
+      },
+      "regression_testing": {
+        "name": "Build Regression and Compatibility Tests",
+        "script": "test_regression_testing.sh",
+        "description": "Tests for regressions and validates compatibility across MSI versions",
+        "tags": ["Slow", "Integration"],
+        "requires_original_msi": true,
+        "requires_root": false,
+        "estimated_duration": 360
+      }
+    }
+  },
+  "validation_phases": {
+    "description": "5-phase validation system implemented in both Windows and Unix build scripts",
+    "phases": [
+      {
+        "phase": 1,
+        "name": "validate_original_msi_structure",
+        "description": "Validates the structure and integrity of the original Postman MSI",
+        "critical": true
+      },
+      {
+        "phase": 2,
+        "name": "validate_source_components", 
+        "description": "Validates source files, certificates, and build components",
+        "critical": true
+      },
+      {
+        "phase": 3,
+        "name": "validate_idt_schema",
+        "description": "Validates IDT table schemas and data format compliance",
+        "critical": true
+      },
+      {
+        "phase": 4,
+        "name": "validate_idt_relationships",
+        "description": "Validates cross-table relationships and referential integrity",
+        "critical": true
+      },
+      {
+        "phase": 5,
+        "name": "validate_no_regressions",
+        "description": "Validates that new MSI maintains original functionality",
+        "critical": true
+      }
+    ]
+  },
+  "build_requirements": {
+    "msi_size_limit_mb": 125,
+    "compression_target_percent": 60,
+    "file_sequence_range": {
+      "postman_files": "1-8999",
+      "authrouter_files": "9001-9999"
+    },
+    "media_ids": {
+      "starship_cab": 1,
+      "authrouter_cab": 900
+    },
+    "service_configuration": {
+      "name": "PostmanAuthRouter",
+      "display_name": "Postman Auth Router",
+      "service_type": 16,
+      "start_type": 2,
+      "error_control": 1
+    },
+    "certificate_configuration": {
+      "ca_subject": "/C=US/ST=CA/L=SF/O=Postman/CN=Postman SAML Enforcer CA",
+      "server_subject": "/C=US/ST=CA/L=SF/O=Postman/CN=identity.getpostman.com",
+      "validity_days": 365,
+      "key_size": 2048
+    }
+  },
+  "reporting": {
+    "formats": ["console", "json", "xml", "html"],
+    "output_directory": "test/results",
+    "archive_failed_runs": true,
+    "include_logs": true,
+    "metrics": {
+      "track_duration": true,
+      "track_memory_usage": true,
+      "track_disk_usage": true,
+      "track_success_rates": true
+    }
+  },
+  "ci_cd": {
+    "github_actions": {
+      "matrix_strategy": true,
+      "platforms": ["windows-2019", "windows-2022", "ubuntu-20.04", "ubuntu-22.04", "macos-11", "macos-12"],
+      "parallel_jobs": 4
+    },
+    "failure_thresholds": {
+      "smoke": 0,
+      "fast": 1,
+      "component": 2,
+      "full": 3
+    },
+    "retry_attempts": 2
+  }
+}
