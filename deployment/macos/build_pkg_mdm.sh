@@ -1101,32 +1101,79 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Enterprise automation: Non-interactive by default
-# Check for INTERACTIVE mode to enable prompts (opposite of before)
-if [[ "${INTERACTIVE:-false}" == "true" ]] || [[ "$1" == "--interactive" ]] || [[ "$1" == "-i" ]]; then
+# Parse command line arguments
+REMOVE_ALL=false
+INTERACTIVE_MODE=false
+
+for arg in "$@"; do
+    case $arg in
+        --all|--complete)
+            REMOVE_ALL=true
+            ;;
+        --interactive|-i)
+            INTERACTIVE_MODE=true
+            ;;
+        --help|-h)
+            echo "Usage: sudo $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --all, --complete    Remove both AuthRouter service AND Postman Enterprise.app"
+            echo "  --interactive, -i    Enable confirmation prompts"
+            echo "  --help, -h          Show this help message"
+            echo ""
+            echo "Default behavior: Removes only the AuthRouter service, preserves Postman app"
+            exit 0
+            ;;
+    esac
+done
+
+# Override with environment variable if set
+if [[ "${INTERACTIVE:-false}" == "true" ]]; then
+    INTERACTIVE_MODE=true
+fi
+
+# Show what will be removed
+if [[ "$INTERACTIVE_MODE" == "true" ]]; then
     echo "This will remove:"
     echo "  - AuthRouter daemon"
     echo "  - LaunchDaemon configuration"
     echo "  - SSL certificates from trust store"
     echo "  - Generated certificate files"
     echo "  - Hosts file modifications"
+    if [[ "$REMOVE_ALL" == "true" ]]; then
+        echo "  - Postman Enterprise.app"
+    fi
     echo ""
-    read -p "Continue? (y/N) " -n 1 -r
+    if [[ "$REMOVE_ALL" == "true" ]]; then
+        read -p "Continue with COMPLETE removal? (y/N) " -n 1 -r
+    else
+        read -p "Continue? (y/N) " -n 1 -r
+    fi
     echo ""
 
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "Uninstall cancelled"
-        echo "To run without prompts: sudo /usr/local/bin/postman/uninstall.sh"
+        echo "Available options:"
+        echo "  sudo $0                    # Remove service only"
+        echo "  sudo $0 --all             # Remove service and app"
+        echo "  sudo $0 --interactive     # Enable prompts"
         exit 0
     fi
 else
-    echo "Running in non-interactive mode - proceeding with removal..."
+    if [[ "$REMOVE_ALL" == "true" ]]; then
+        echo "Running COMPLETE removal - both service and app will be removed..."
+    else
+        echo "Running service-only removal - Postman app will be preserved..."
+    fi
     echo "This will remove:"
     echo "  - AuthRouter daemon"
     echo "  - LaunchDaemon configuration" 
     echo "  - SSL certificates from trust store"
     echo "  - Generated certificate files"
     echo "  - Hosts file modifications"
+    if [[ "$REMOVE_ALL" == "true" ]]; then
+        echo "  - Postman Enterprise.app"
+    fi
     echo ""
     echo "Note: Use --interactive flag to enable confirmation prompts"
 fi
@@ -1185,11 +1232,28 @@ else
     echo "  - No hosts file modifications found"
 fi
 
+# Remove Postman Enterprise.app if --all flag was specified
+if [[ "$REMOVE_ALL" == "true" ]]; then
+    echo "Removing Postman Enterprise.app..."
+    
+    if [ -d "/Applications/Postman Enterprise.app" ]; then
+        rm -rf "/Applications/Postman Enterprise.app"
+        echo "   Postman Enterprise.app removed"
+    else
+        echo "  - Postman Enterprise.app not found"
+    fi
+fi
+
 echo ""
-echo "Uninstall complete!"
-echo ""
-echo "Note: Postman Enterprise.app was NOT removed."
-echo "To remove Postman, drag it from /Applications to Trash."
+if [[ "$REMOVE_ALL" == "true" ]]; then
+    echo "Complete uninstall finished!"
+    echo "Both AuthRouter service and Postman Enterprise.app have been removed."
+else
+    echo "Service uninstall complete!"
+    echo ""
+    echo "Note: Postman Enterprise.app was NOT removed."
+    echo "To remove everything: sudo $0 --all"
+fi
 UNINSTALL_SCRIPT
     
     chmod +x "combined_root_$ARCH/usr/local/bin/postman/uninstall.sh"
@@ -1353,7 +1417,8 @@ echo ""
 echo "Installation complete!"
 echo "  - Postman Enterprise.app installed"
 echo "  - AuthRouter daemon ${TEAM:+configured for team: $TEAM}"
-echo "  - Uninstall: sudo /usr/local/bin/postman/uninstall.sh"
+echo "  - Uninstall service: sudo /usr/local/bin/postman/uninstall.sh"
+echo "  - Uninstall everything: sudo /usr/local/bin/postman/uninstall.sh --all"
 
 exit 0
 POSTINSTALL
@@ -1519,7 +1584,8 @@ validate_final_pkg() {
         log "INFO" "  Or double-click in Finder"
         log ""
         log "INFO" "To uninstall:"
-        log "INFO" "  sudo /usr/local/bin/postman/uninstall.sh"
+        log "INFO" "  sudo /usr/local/bin/postman/uninstall.sh      # Service only"
+        log "INFO" "  sudo /usr/local/bin/postman/uninstall.sh --all # Everything"
     else
         die "Failed to create PKG for $ARCH"
         return 1
