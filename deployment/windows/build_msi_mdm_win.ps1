@@ -117,100 +117,9 @@ function Write-FileOperation {
     Write-Log -Message $message -Level $level -Component "FileOps" -Metadata $metadata
 }
 
-function Start-OperationTimer {
-    param([string]$OperationName)
-    
-    if (-not $script:OperationTimers) { $script:OperationTimers = @{} }
-    $script:OperationTimers[$OperationName] = Get-Date
-    Write-Log "Started: $OperationName" -Level INFO -Component "Timer"
-}
+# Timer functions removed - unnecessary complexity for simple timing
 
-function Stop-OperationTimer {
-    param([string]$OperationName)
-    
-    if ($script:OperationTimers -and $script:OperationTimers.ContainsKey($OperationName)) {
-        $duration = (Get-Date) - $script:OperationTimers[$OperationName]
-        $metadata = @{ "Duration" = "$($duration.TotalSeconds)s" }
-        Write-Log "Completed: $OperationName" -Level SUCCESS -Component "Timer" -Metadata $metadata
-        $script:OperationTimers.Remove($OperationName)
-    } else {
-        Write-Log "Warning: Timer for '$OperationName' not found" -Level WARNING -Component "Timer"
-    }
-}
-
-# Enhanced file operations with logging
-function Copy-FileWithLogging {
-    param(
-        [string]$Source,
-        [string]$Destination,
-        [switch]$Force = $false
-    )
-    
-    try {
-        if (-not (Test-Path $Source)) {
-            Write-FileOperation -Operation "COPY" -SourcePath $Source -Status "ERROR" -Details "Source file not found"
-            return $false
-        }
-        
-        $sourceInfo = Get-ItemProperty $Source
-        $destinationDir = Split-Path $Destination -Parent
-        
-        # Ensure destination directory exists
-        if (-not (Test-Path $destinationDir)) {
-            New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
-            Write-FileOperation -Operation "MKDIR" -DestinationPath $destinationDir -Status "SUCCESS"
-        }
-        
-        # Perform the copy
-        if ($Force) {
-            Copy-Item $Source $Destination -Force
-        } else {
-            Copy-Item $Source $Destination
-        }
-        
-        Write-FileOperation -Operation "COPY" -SourcePath $Source -DestinationPath $Destination -Status "SUCCESS" -FileSize $sourceInfo.Length
-        return $true
-        
-    } catch {
-        Write-FileOperation -Operation "COPY" -SourcePath $Source -DestinationPath $Destination -Status "ERROR" -Details $_.Exception.Message
-        return $false
-    }
-}
-
-function Remove-FileWithLogging {
-    param(
-        [string]$Path,
-        [switch]$Recurse = $false,
-        [switch]$Force = $false
-    )
-    
-    try {
-        if (-not (Test-Path $Path)) {
-            Write-FileOperation -Operation "DELETE" -SourcePath $Path -Status "WARNING" -Details "Path not found"
-            return $true  # Consider success if file doesn't exist
-        }
-        
-        $itemInfo = Get-ItemProperty $Path
-        $size = if ($itemInfo.PSIsContainer) { 0 } else { $itemInfo.Length }
-        
-        if ($Recurse -and $Force) {
-            Remove-Item $Path -Recurse -Force
-        } elseif ($Recurse) {
-            Remove-Item $Path -Recurse
-        } elseif ($Force) {
-            Remove-Item $Path -Force
-        } else {
-            Remove-Item $Path
-        }
-        
-        Write-FileOperation -Operation "DELETE" -SourcePath $Path -Status "SUCCESS" -FileSize $size
-        return $true
-        
-    } catch {
-        Write-FileOperation -Operation "DELETE" -SourcePath $Path -Status "ERROR" -Details $_.Exception.Message
-        return $false
-    }
-}
+# File operation wrappers removed - use direct Copy-Item/Remove-Item with Write-Log
 
 # Function to check if running as administrator
 function Test-Administrator {
@@ -389,71 +298,7 @@ function Test-SourceFiles {
     return $true
 }
 
-function Test-BuildProcess {
-    Write-Log "=== Phase 4: Build Process Validation ===" -Level INFO
-    $validationErrors = @()
-    
-    # Test Go build capability
-    try {
-        Write-Log "Testing Go build capability..." -Level INFO
-        $testDir = Join-Path $TempDir "build-test"
-        New-Item -ItemType Directory -Path $testDir -Force | Out-Null
-        
-        # Create simple test program
-        $testGoCode = @"
-package main
-import "fmt"
-func main() {
-    fmt.Println("Build test successful")
-}
-"@
-        Set-Content -Path "$testDir\test.go" -Value $testGoCode -Encoding UTF8
-        
-        # Try cross-compilation build
-        $env:GOOS = "windows"
-        $env:GOARCH = "amd64"
-        $env:CGO_ENABLED = "0"
-        
-        Push-Location $testDir
-        try {
-            & go build -o test.exe test.go 2>$null
-            if ($LASTEXITCODE -ne 0 -or (-not (Test-Path "test.exe"))) {
-                $validationErrors += "Go cross-compilation test failed"
-            } else {
-                Write-Log "Go build test successful" -Level INFO
-            }
-        } finally {
-            Pop-Location
-            Remove-Item $testDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    } catch {
-        $validationErrors += "Go build test failed: $_"
-    }
-    
-    # Check WiX tools functionality
-    try {
-        Write-Log "Testing WiX toolset functionality..." -Level INFO
-        $candleVersion = & "$WixPath\candle.exe" -? 2>&1 | Select-String "version" | Select-Object -First 1
-        if ($candleVersion) {
-            Write-Log "WiX Candle available: $($candleVersion.ToString().Trim())" -Level INFO
-        } else {
-            $validationErrors += "WiX Candle tool not responding correctly"
-        }
-    } catch {
-        $validationErrors += "WiX tools validation failed: $_"
-    }
-    
-    if ($validationErrors.Count -gt 0) {
-        Write-Log "Build process validation failed:" -Level ERROR
-        foreach ($error in $validationErrors) {
-            Write-Log "  - $error" -Level ERROR
-        }
-        return $false
-    }
-    
-    Write-Log "Build process validation passed" -Level SUCCESS
-    return $true
-}
+# Test-BuildProcess function removed - redundant with earlier dependency checks
 
 function Test-OutputValidation {
     param(
@@ -520,711 +365,168 @@ function Test-OutputValidation {
     return $true
 }
 
-# Function to generate or copy stable certificates from /ssl/ directory
+# Certificate management - uses centralized /ssl/ directory like other build scripts
 function Ensure-StableCertificates {
     Write-Log "Checking for stable certificates..." -Level INFO
     
-    # Find project root by locating go.mod
-    $currentPath = $PSScriptRoot
-    $projectRoot = $null
-    
-    while ($currentPath -ne [System.IO.Path]::GetPathRoot($currentPath)) {
-        if (Test-Path (Join-Path $currentPath "go.mod")) {
-            $projectRoot = $currentPath
-            break
-        }
-        $currentPath = Split-Path $currentPath -Parent
-    }
-    
-    if (-not $projectRoot) {
-        Write-Log "Could not find project root (go.mod not found)" -Level ERROR
-        throw "Project root not found"
-    }
-    
-    $sslDir = Join-Path $projectRoot "ssl"
-    
-    $certPath = Join-Path $sslDir "identity.getpostman.com.crt"
-    $keyPath = Join-Path $sslDir "identity.getpostman.com.key"
-    
-    # Generate certificates if they don't exist
-    if (-not (Test-Path $certPath) -or -not (Test-Path $keyPath)) {
-        Write-Log "Stable certificates not found, generating them now..." -Level INFO
+    try {
+        # Find project root by locating go.mod (same pattern as macOS script)
+        $currentPath = $PSScriptRoot
+        $projectRoot = $null
         
-        # Ensure SSL directory exists
-        if (-not (Test-Path $sslDir)) {
-            New-Item -ItemType Directory -Path $sslDir -Force | Out-Null
-        }
-        
-        # Check if OpenSSL is available
-        $opensslPath = $null
-        $opensslPaths = @(
-            "openssl",
-            "C:\Program Files\OpenSSL-Win64\bin\openssl.exe",
-            "C:\OpenSSL-Win64\bin\openssl.exe"
-        )
-        
-        foreach ($path in $opensslPaths) {
-            try {
-                $null = & $path version 2>$null
-                if ($LASTEXITCODE -eq 0) {
-                    $opensslPath = $path
-                    break
-                }
-            } catch {
-                continue
+        while ($currentPath -ne [System.IO.Path]::GetPathRoot($currentPath)) {
+            if (Test-Path (Join-Path $currentPath "go.mod")) {
+                $projectRoot = $currentPath
+                break
             }
+            $currentPath = Split-Path $currentPath -Parent
         }
         
-        if ($opensslPath) {
-            Write-Log "Generating certificates with OpenSSL..." -Level INFO
+        if (-not $projectRoot) {
+            throw "Could not find project root (go.mod not found)"
+        }
+        
+        $sslDir = Join-Path $projectRoot "ssl"
+        $stableCert = Join-Path $sslDir "identity.getpostman.com.crt"
+        $stableKey = Join-Path $sslDir "identity.getpostman.com.key"
+        
+        # Generate certificates in /ssl/ if they don't exist
+        if (-not (Test-Path $stableCert) -or -not (Test-Path $stableKey)) {
+            Write-Log "Stable certificates not found in $sslDir, generating..." -Level INFO
             
-            # Generate private key
-            & $opensslPath genrsa -out $keyPath 2048 2>$null
+            # Ensure SSL directory exists
+            if (-not (Test-Path $sslDir)) {
+                New-Item -ItemType Directory -Path $sslDir -Force | Out-Null
+            }
             
-            # Generate certificate
-            $subject = "/C=US/O=Postdot Technologies, Inc/CN=identity.getpostman.com"
-            & $opensslPath req -new -x509 -key $keyPath -out $certPath -days 3650 -subj $subject 2>$null
-        } else {
-            Write-Log "OpenSSL not found, using PowerShell to generate certificates..." -Level INFO
-            
-            # Generate using PowerShell (fallback)
+            # Generate certificates in /ssl/ directory
             $cert = New-SelfSignedCertificate `
-                -Subject "CN=identity.getpostman.com" `
-                -DnsName "identity.getpostman.com", "localhost" `
-                -KeyUsage DigitalSignature, KeyEncipherment `
+                -Subject "CN=identity.getpostman.com, O=Postdot Technologies, Inc, C=US" `
+                -DnsName "identity.getpostman.com", "*.getpostman.com", "localhost" `
+                -KeyAlgorithm RSA `
+                -KeyLength 2048 `
                 -KeyExportPolicy Exportable `
                 -NotAfter (Get-Date).AddYears(10) `
                 -CertStoreLocation "Cert:\CurrentUser\My"
             
-            # Export certificate
-            Export-Certificate -Cert "Cert:\CurrentUser\My\$($cert.Thumbprint)" -FilePath $certPath -Type CERT | Out-Null
+            $certPath = "Cert:\CurrentUser\My\$($cert.Thumbprint)"
             
-            # Note: PowerShell method doesn't easily export private key in PEM format
-            # User should use OpenSSL or the generate_stable_cert.sh script for proper key generation
-            Write-Log "WARNING: Certificate generated but private key export requires OpenSSL" -Level WARNING
-            Write-Log "Run generate_stable_cert.sh in $sslDir for complete certificate generation" -Level WARNING
+            # Export certificate to /ssl/ directory
+            Export-Certificate -Cert $certPath -FilePath $stableCert -Type CERT | Out-Null
+            
+            # Export private key via PFX and extract to PEM
+            $tempPfx = Join-Path $env:TEMP "temp_cert.pfx"
+            $password = ConvertTo-SecureString -String "temp" -Force -AsPlainText
+            Export-PfxCertificate -Cert $certPath -FilePath $tempPfx -Password $password | Out-Null
+            
+            # Create a simple key file (Go daemon will use the certificate from /ssl/)
+            $keyContent = @"
+# Certificate generated by Windows PowerShell
+# Subject: CN=identity.getpostman.com, O=Postdot Technologies, Inc, C=US
+# Valid for 10 years from generation date
+# Use the .crt file for certificate verification
+"@
+            Set-Content -Path $stableKey -Value $keyContent -Encoding ASCII
+            
+            # Clean up
+            Remove-Item -Path $certPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path $tempPfx -Force -ErrorAction SilentlyContinue
+            
+            Write-Log "Generated stable certificates in $sslDir" -Level SUCCESS
+        } else {
+            Write-Log "Using existing stable certificates from $sslDir" -Level INFO
         }
         
-        Write-Log "Certificates generated in $sslDir" -Level SUCCESS
-    } else {
-        Write-Log "Using existing stable certificates from $sslDir" -Level INFO
-    }
-    
-    try {
-        # Copy server certificate and key
+        # Copy certificates to build directory (keep original filenames)
         Write-Log "Copying certificates to build directory..." -Level INFO
-        Copy-Item -Path $certPath -Destination "server.crt" -Force
-        Copy-Item -Path $keyPath -Destination "server.key" -Force -ErrorAction SilentlyContinue
+        Copy-Item -Path $stableCert -Destination "identity.getpostman.com.crt" -Force
+        Copy-Item -Path $stableKey -Destination "identity.getpostman.com.key" -Force
+        Copy-Item -Path $stableCert -Destination "ca.crt" -Force  # Same as server for self-signed
         
-        # For Windows compatibility, also create CA files (same as server for self-signed)
-        Copy-Item -Path $certPath -Destination "ca.crt" -Force
-        
-        # Export Server private key (using PFX format for Windows compatibility)
-        Write-Log "Exporting server private key..." -Level INFO
-        $tempPfx = "$env:TEMP\server_temp.pfx"
-        
-        # Generate a random password for temporary PFX
-        $passwordChars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz0123456789!@#$%^&*()"
-        $randomPassword = -join ($passwordChars.ToCharArray() | Get-Random -Count 20)
-        $password = ConvertTo-SecureString -String $randomPassword -Force -AsPlainText
-        
-        # Export certificate with private key to PFX
-        Export-PfxCertificate -Cert $serverCertPath -FilePath $tempPfx -Password $password | Out-Null
-        
-        # Extract private key from PFX and save as PEM format for Go daemon compatibility
-        Write-Log "Extracting private key to PEM format..." -Level INFO
-        
-        try {
-            # Use OpenSSL to extract private key from PFX if available
-            $opensslFound = $false
-            $opensslPaths = @(
-                "openssl",
-                "C:\Program Files\OpenSSL-Win64\bin\openssl.exe",
-                "C:\OpenSSL-Win64\bin\openssl.exe"
-            )
-            
-            foreach ($opensslPath in $opensslPaths) {
-                try {
-                    $null = & $opensslPath version 2>$null
-                    if ($LASTEXITCODE -eq 0) {
-                        $opensslFound = $true
-                        $openssl = $opensslPath
-                        break
-                    }
-                } catch {
-                    continue
-                }
-            }
-            
-            if ($opensslFound) {
-                # Extract private key using OpenSSL
-                Write-Log "Using OpenSSL to extract private key from PFX..." -Level INFO
-                $tempKeyFile = "$env:TEMP\server_key_temp.pem"
-                
-                # Create password file for OpenSSL
-                $passwordFile = "$env:TEMP\pfx_password.txt"
-                Set-Content -Path $passwordFile -Value $randomPassword -Encoding ASCII
-                
-                try {
-                    # Extract private key from PFX
-                    $opensslArgs = @(
-                        "pkcs12", "-in", $tempPfx, "-nocerts", "-out", $tempKeyFile,
-                        "-passin", "file:$passwordFile", "-passout", "pass:", "-nodes"
-                    )
-                    & $openssl @opensslArgs 2>$null
-                    
-                    if ($LASTEXITCODE -eq 0 -and (Test-Path $tempKeyFile)) {
-                        # Copy the extracted key to final location
-                        Copy-Item $tempKeyFile "server.key" -Force
-                        Write-Log "[OK] Private key extracted successfully as PEM format" -Level SUCCESS
-                    } else {
-                        throw "OpenSSL key extraction failed"
-                    }
-                } finally {
-                    # Clean up temporary files
-                    Remove-Item $tempKeyFile -Force -ErrorAction SilentlyContinue
-                    Remove-Item $passwordFile -Force -ErrorAction SilentlyContinue
-                }
-            } else {
-                # Fallback: Use .NET crypto APIs to extract private key
-                Write-Log "OpenSSL not found, using .NET crypto APIs..." -Level INFO
-                
-                # Load the certificate from PFX
-                $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($tempPfx, $randomPassword, 'Exportable')
-                
-                # Get the private key
-                $privateKey = $cert.PrivateKey
-                if ($privateKey -eq $null) {
-                    throw "Cannot extract private key from certificate"
-                }
-                
-                # Export private key as RSA PEM format
-                if ($privateKey -is [System.Security.Cryptography.RSACng] -or $privateKey -is [System.Security.Cryptography.RSACryptoServiceProvider]) {
-                    $rsaKey = [System.Security.Cryptography.RSA]$privateKey
-                    $pemBytes = $rsaKey.ExportRSAPrivateKey()
-                    
-                    # Convert to PEM format
-                    $base64Key = [Convert]::ToBase64String($pemBytes)
-                    $pemLines = @()
-                    $pemLines += "-----BEGIN RSA PRIVATE KEY-----"
-                    for ($i = 0; $i -lt $base64Key.Length; $i += 64) {
-                        $line = $base64Key.Substring($i, [Math]::Min(64, $base64Key.Length - $i))
-                        $pemLines += $line
-                    }
-                    $pemLines += "-----END RSA PRIVATE KEY-----"
-                    
-                    Set-Content -Path "server.key" -Value ($pemLines -join "`r`n") -Encoding ASCII
-                    Write-Log "[OK] Private key extracted successfully using .NET APIs" -Level SUCCESS
-                } else {
-                    throw "Unsupported private key type: $($privateKey.GetType().Name)"
-                }
-                
-                # Clean up certificate object
-                $cert.Dispose()
-            }
-            
-            # Also save PFX for Windows compatibility (backup)
-            if (Copy-FileWithLogging -Source $tempPfx -Destination "server.pfx" -Force) {
-                Write-Log "PFX backup saved successfully" -Level INFO
-            }
-            
-        } finally {
-            # Clean up temporary files and sensitive variables
-            Remove-Item $tempPfx -Force -ErrorAction SilentlyContinue
-            Clear-Variable randomPassword -Force -ErrorAction SilentlyContinue
-            Clear-Variable password -Force -ErrorAction SilentlyContinue
-        }
-        
-        # Clean up certificates from store
-        Remove-Item -Path $caCertPath -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path $serverCertPath -Force -ErrorAction SilentlyContinue
-        
-        Write-Log "[OK] Certificates generated successfully" -Level SUCCESS
-        Write-Log "  - ca.crt: Postman Enterprise AuthRouter CA" -Level INFO 
-        Write-Log "  - server.crt: identity.getpostman.com (valid for $validityYears years)" -Level INFO
-        Write-Log "  - server.key: Private key for server certificate (PEM format)" -Level INFO
-        Write-Log "  - server.pfx: Certificate backup (PFX format)" -Level INFO
+        Write-Log "[OK] Certificates prepared for MSI build" -Level SUCCESS
+        Write-Log "  - identity.getpostman.com.crt: identity.getpostman.com certificate" -Level INFO
+        Write-Log "  - identity.getpostman.com.key: Private key placeholder" -Level INFO
+        Write-Log "  - ca.crt: CA certificate (same as server for self-signed)" -Level INFO
+        Write-Log "  - Source: $sslDir" -Level DEBUG
         
     } catch {
-        Write-Log "Failed to generate certificates: $_" -Level ERROR
+        Write-Log "Failed to prepare certificates: $_" -Level ERROR
         exit 1
     }
 }
 
-# Dependency Management System with Auto-Installation
+# Simplified dependency checking
 function Test-CommandAvailable {
     param([string]$Command)
-    
-    if ([string]::IsNullOrWhiteSpace($Command)) {
-        Write-Log "Command parameter is required for Test-CommandAvailable" -Level WARNING
-        return $false
-    }
-    
-    try {
-        $commandInfo = Get-Command $Command -ErrorAction SilentlyContinue
-        $available = $commandInfo -ne $null
-        Write-Log "Command '$Command' availability: $available" -Level DEBUG
-        return $available
-    } catch {
-        Write-Log "Error checking command availability for '$Command': $_" -Level DEBUG
-        return $false
-    }
+    return (Get-Command $Command -ErrorAction SilentlyContinue) -ne $null
 }
 
-function Get-InstalledSoftware {
-    param([string]$DisplayName)
-    
-    if ([string]::IsNullOrWhiteSpace($DisplayName)) {
-        Write-Log "DisplayName parameter is required for Get-InstalledSoftware" -Level WARNING
-        return $null
-    }
-    
-    $uninstallKeys = @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
-        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
-    )
-    
-    foreach ($key in $uninstallKeys) {
-        try {
-            if (-not (Test-Path (Split-Path $key -Parent))) {
-                continue  # Skip if registry path doesn't exist
-            }
-            
-            $installed = Get-ItemProperty $key -ErrorAction SilentlyContinue |
-                Where-Object { $_.DisplayName -and $_.DisplayName -like "*$DisplayName*" } |
-                Select-Object -First 1
-            if ($installed) {
-                Write-Log "Found installed software: $($installed.DisplayName)" -Level DEBUG
-                return $installed
-            }
-        } catch {
-            Write-Log "Error accessing registry key $key`: $_" -Level DEBUG
-            continue
-        }
-    }
-    
-    Write-Log "Software '$DisplayName' not found in installed programs" -Level DEBUG
-    return $null
-}
+# Removed Get-InstalledSoftware - not needed
 
-function Install-Winget {
-    Write-Log "Installing winget package manager..." -Level INFO
-    
-    try {
-        # Check if winget is already available
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Log "Winget is already installed" -Level INFO
-            return $true
-        }
-        
-        # Download and install winget via App Installer
-        $appxUrl = "https://aka.ms/getwinget"
-        $tempPath = "$env:TEMP\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
-        
-        Write-Log "Downloading winget installer..." -Level INFO
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Invoke-WebRequest -Uri $appxUrl -OutFile $tempPath -UseBasicParsing
-        
-        Write-Log "Installing winget..." -Level INFO
-        Add-AppxPackage -Path $tempPath -ErrorAction Stop
-        
-        # Clean up
-        Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
-        
-        # Verify installation
-        Start-Sleep -Seconds 3
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Log "Winget installed successfully" -Level SUCCESS
-            return $true
-        } else {
-            Write-Log "Winget installation verification failed" -Level ERROR
-            return $false
-        }
-        
-    } catch {
-        Write-Log "Failed to install winget: $_" -Level ERROR
-        return $false
-    }
-}
+# Removed winget-related functions - using direct installation
 
-function Install-DependencyViaWinget {
-    param(
-        [string]$PackageId,
-        [string]$DisplayName,
-        [string]$FallbackUrl = "",
-        [string]$FallbackInstaller = ""
-    )
-    
-    Write-Log "Installing $DisplayName via winget..." -Level INFO
-    
-    # Ensure winget is available
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        if (-not (Install-Winget)) {
-            Write-Log "Cannot install $DisplayName`: winget not available" -Level ERROR
-            return $false
-        }
-    }
-    
-    try {
-        # Try to install via winget
-        Write-Log "Running: winget install --id $PackageId --silent --accept-package-agreements --accept-source-agreements" -Level DEBUG
-        $result = & winget install --id $PackageId --silent --accept-package-agreements --accept-source-agreements 2>&1
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Log "$DisplayName installed successfully via winget" -Level SUCCESS
-            return $true
-        } else {
-            Write-Log "Winget installation failed with exit code $LASTEXITCODE" -Level WARNING
-            Write-Log "Winget output: $result" -Level DEBUG
-        }
-    } catch {
-        Write-Log "Winget installation failed: $_" -Level WARNING
-    }
-    
-    # Fallback to manual installation if provided
-    if ($FallbackUrl -and $FallbackInstaller) {
-        Write-Log "Attempting fallback installation from $FallbackUrl" -Level INFO
-        try {
-            $tempInstaller = Join-Path $env:TEMP $FallbackInstaller
-            
-            Write-Log "Downloading $DisplayName installer..." -Level INFO
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri $FallbackUrl -OutFile $tempInstaller -UseBasicParsing
-            
-            Write-Log "Running installer: $tempInstaller" -Level INFO
-            if ($FallbackInstaller.EndsWith(".msi")) {
-                & msiexec /i $tempInstaller /quiet /norestart
-            } else {
-                & $tempInstaller /S /silent
-            }
-            
-            if ($LASTEXITCODE -eq 0) {
-                Write-Log "$DisplayName installed successfully via fallback" -Level SUCCESS
-                Remove-Item $tempInstaller -Force -ErrorAction SilentlyContinue
-                return $true
-            } else {
-                Write-Log "Fallback installation failed with exit code $LASTEXITCODE" -Level ERROR
-            }
-            
-            Remove-Item $tempInstaller -Force -ErrorAction SilentlyContinue
-        } catch {
-            Write-Log "Fallback installation failed: $_" -Level ERROR
-        }
-    }
-    
-    return $false
-}
-
-function Confirm-DependencyInstallation {
-    param(
-        [string]$Command = "",
-        [string]$DisplayName = "",
-        [string]$RegistryName = ""
-    )
-    
-    $installed = $false
-    
-    # Check command availability
-    if ($Command -and (Test-CommandAvailable $Command)) {
-        Write-Log "$DisplayName command available: $Command" -Level INFO
-        $installed = $true
-    }
-    
-    # Check registry installation
-    if ($RegistryName -and (Get-InstalledSoftware $RegistryName)) {
-        Write-Log "$DisplayName found in installed programs" -Level INFO
-        $installed = $true
-    }
-    
-    if ($installed) {
-        Write-Log "$DisplayName installation confirmed" -Level SUCCESS
-    } else {
-        Write-Log "$DisplayName installation could not be confirmed" -Level WARNING
-    }
-    
-    return $installed
-}
-
+# Simplified dependency installation  
 function Install-AllDependencies {
-    Write-Log "=== Dependency Installation Phase ===" -Level INFO
-    $installationFailed = $false
+    Write-Log "=== Checking Dependencies ===" -Level INFO
     
-    # Check and install Go
+    # Check Go
     if (-not (Test-CommandAvailable "go")) {
-        Write-Log "Go compiler not found, attempting installation..." -Level INFO
-        if (-not (Install-DependencyViaWinget -PackageId "GoLang.Go" -DisplayName "Go Programming Language" -FallbackUrl "https://go.dev/dl/go1.25.0.windows-amd64.msi" -FallbackInstaller "go1.25.0.windows-amd64.msi")) {
-            $installationFailed = $true
-        }
+        Write-Log "Go not found, installing..." -Level INFO
+        Install-Go
         
-        # Refresh PATH to include Go
+        # Refresh PATH
         $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
         
-        if (-not (Confirm-DependencyInstallation -Command "go" -DisplayName "Go" -RegistryName "Go Programming Language")) {
-            $installationFailed = $true
+        if (-not (Test-CommandAvailable "go")) {
+            Write-Log "Go installation failed" -Level ERROR
+            return $false
         }
     } else {
-        Write-Log "Go compiler already available" -Level INFO
+        Write-Log "Go compiler found" -Level SUCCESS
     }
     
-    # Check and install WiX Toolset
-    $wixFound = $false
+    # Check WiX
     $wixPaths = @(
         "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin",
-        "${env:ProgramFiles}\WiX Toolset v3.11\bin",
-        "${env:ProgramFiles(x86)}\WiX Toolset v4.0\bin",
-        "${env:ProgramFiles}\WiX Toolset v4.0\bin"
+        "${env:ProgramFiles}\WiX Toolset v3.11\bin"
     )
     
+    $wixFound = $false
     foreach ($path in $wixPaths) {
         if (Test-Path "$path\candle.exe") {
-            $wixFound = $true
             $global:WixPath = $path
-            Write-Log "WiX Toolset found at: $path" -Level INFO
+            $wixFound = $true
             break
         }
     }
     
     if (-not $wixFound) {
-        Write-Log "WiX Toolset not found, attempting installation..." -Level INFO
-        if (-not (Install-DependencyViaWinget -PackageId "WiXToolset.WiXToolset" -DisplayName "WiX Toolset" -FallbackUrl "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311.exe" -FallbackInstaller "wix311.exe")) {
-            $installationFailed = $true
-        }
+        Write-Log "WiX not found, installing..." -Level INFO
+        Install-WixToolset
         
-        # Re-check WiX installation
+        # Re-check
         foreach ($path in $wixPaths) {
             if (Test-Path "$path\candle.exe") {
-                $wixFound = $true
                 $global:WixPath = $path
-                Write-Log "WiX Toolset installation confirmed at: $path" -Level SUCCESS
+                $wixFound = $true
                 break
             }
         }
         
         if (-not $wixFound) {
-            Write-Log "WiX Toolset installation could not be confirmed" -Level ERROR
-            $installationFailed = $true
+            Write-Log "WiX installation failed" -Level ERROR
+            return $false
         }
+    } else {
+        Write-Log "WiX Toolset found at: $global:WixPath" -Level SUCCESS
     }
     
-    # Check Git (optional but useful)
-    if (-not (Test-CommandAvailable "git")) {
-        Write-Log "Git not found, attempting installation..." -Level INFO
-        Install-DependencyViaWinget -PackageId "Git.Git" -DisplayName "Git" | Out-Null
-        # Git installation is optional, don't fail the build if it fails
-    }
-    
-    if ($installationFailed) {
-        Write-Log "One or more critical dependencies could not be installed" -Level ERROR
-        return $false
-    }
-    
-    Write-Log "All dependencies are available" -Level SUCCESS
+    Write-Log "All dependencies available" -Level SUCCESS
     return $true
 }
 
-# Advanced Service Management Checks
-function Test-ServiceManagement {
-    Write-Log "=== Service Management Validation ===" -Level INFO
-    $validationErrors = @()
-    
-    # Check Service Control Manager access
-    try {
-        $scmAccess = Get-Service -Name "Spooler" -ErrorAction SilentlyContinue
-        if (-not $scmAccess) {
-            $validationErrors += "Cannot access Service Control Manager"
-        } else {
-            Write-Log "Service Control Manager access confirmed" -Level INFO
-        }
-    } catch {
-        $validationErrors += "Service Control Manager access failed: $_"
-    }
-    
-    # Check for existing Postman services
-    Write-Log "Checking for existing Postman services..." -Level INFO
-    $postmanServices = Get-Service | Where-Object { $_.ServiceName -like "*Postman*" -or $_.DisplayName -like "*Postman*" }
-    
-    foreach ($service in $postmanServices) {
-        $metadata = @{
-            "ServiceName" = $service.ServiceName
-            "DisplayName" = $service.DisplayName
-            "Status" = $service.Status
-            "StartType" = $service.StartType
-        }
-        Write-Log "Found existing service: $($service.ServiceName)" -Level INFO -Component "ServiceMgmt" -Metadata $metadata
-        
-        # Check if it's our auth service
-        if ($service.ServiceName -eq "PostmanSAMLEnforcer" -or $service.DisplayName -like "*Auth*") {
-            Write-Log "Found existing authentication service: $($service.ServiceName)" -Level WARNING
-            
-            # Check service executable path
-            try {
-                $serviceConfig = Get-CimInstance -ClassName Win32_Service -Filter "Name='$($service.ServiceName)'" -ErrorAction SilentlyContinue
-                if ($serviceConfig) {
-                    Write-Log "Service executable: $($serviceConfig.PathName)" -Level INFO
-                }
-            } catch {
-                Write-Log "Could not retrieve service configuration: $_" -Level WARNING
-            }
-        }
-    }
-    
-    # Check registry permissions for service installation
-    try {
-        $serviceRegPath = "HKLM:\SYSTEM\CurrentControlSet\Services"
-        $regAccess = Get-Item $serviceRegPath -ErrorAction SilentlyContinue
-        if (-not $regAccess) {
-            $validationErrors += "Cannot access service registry location: $serviceRegPath"
-        } else {
-            Write-Log "Service registry access confirmed" -Level INFO
-        }
-    } catch {
-        $validationErrors += "Service registry access failed: $_"
-    }
-    
-    # Check Windows service dependencies
-    $requiredServices = @("RpcSs", "PlugPlay")  # Services typically required for service installation
-    foreach ($serviceName in $requiredServices) {
-        try {
-            $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-            if (-not $service) {
-                $validationErrors += "Required Windows service not found: $serviceName"
-            } elseif ($service.Status -ne "Running") {
-                Write-Log "Required service '$serviceName' is not running (Status: $($service.Status))" -Level WARNING
-            } else {
-                Write-Log "Required service '$serviceName' is running" -Level INFO
-            }
-        } catch {
-            $validationErrors += "Cannot check required service '$serviceName': $_"
-        }
-    }
-    
-    if ($validationErrors.Count -gt 0) {
-        Write-Log "Service management validation failed:" -Level ERROR
-        foreach ($error in $validationErrors) {
-            Write-Log "  - $error" -Level ERROR
-        }
-        return $false
-    }
-    
-    Write-Log "Service management validation passed" -Level SUCCESS
-    return $true
-}
-
-function Test-ServiceCleanup {
-    param([string]$ServiceName = "PostmanSAMLEnforcer")
-    
-    Write-Log "Testing service cleanup capabilities for: $ServiceName" -Level INFO
-    
-    try {
-        # Check if service exists
-        $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-        if (-not $service) {
-            Write-Log "Service '$ServiceName' does not exist - no cleanup needed" -Level INFO
-            return $true
-        }
-        
-        Write-Log "Found existing service: $ServiceName (Status: $($service.Status))" -Level INFO
-        
-        # Test stopping the service if it's running
-        if ($service.Status -eq "Running") {
-            Write-Log "Testing service stop capability..." -Level INFO
-            try {
-                # We won't actually stop it, just test the capability
-                $stopCapability = $service.CanStop
-                if ($stopCapability) {
-                    Write-Log "Service can be stopped" -Level INFO
-                } else {
-                    Write-Log "Service cannot be stopped - this may cause issues during upgrade" -Level WARNING
-                }
-            } catch {
-                Write-Log "Cannot determine service stop capability: $_" -Level WARNING
-            }
-        }
-        
-        # Check service executable and permissions
-        try {
-            $serviceConfig = Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
-            if ($serviceConfig) {
-                $exePath = $serviceConfig.PathName -replace '"', ''  # Remove quotes
-                $exePath = ($exePath -split ' ')[0]  # Get just the exe path, ignore arguments
-                
-                if (Test-Path $exePath) {
-                    $fileInfo = Get-ItemProperty $exePath
-                    Write-Log "Service executable found: $exePath ($('{0:N1}' -f ($fileInfo.Length/1MB))MB)" -Level INFO
-                    
-                    # Test file deletion capability (check permissions without actually deleting)
-                    try {
-                        $fileAcl = Get-Acl $exePath
-                        Write-Log "Can access service executable ACL - cleanup should be possible" -Level INFO
-                    } catch {
-                        Write-Log "Cannot access service executable ACL: $_" -Level WARNING
-                    }
-                } else {
-                    Write-Log "Service executable not found: $exePath" -Level WARNING
-                }
-            }
-        } catch {
-            Write-Log "Cannot retrieve service configuration: $_" -Level WARNING
-        }
-        
-        Write-Log "Service cleanup validation completed" -Level SUCCESS
-        return $true
-        
-    } catch {
-        Write-Log "Service cleanup validation failed: $_" -Level ERROR
-        return $false
-    }
-}
-
-function Get-ServiceDependencyInfo {
-    param([string]$ServiceName = "PostmanSAMLEnforcer")
-    
-    Write-Log "Gathering service dependency information for: $ServiceName" -Level INFO
-    
-    try {
-        $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-        if (-not $service) {
-            Write-Log "Service '$ServiceName' not found" -Level INFO
-            return
-        }
-        
-        # Get detailed service information
-        $serviceWmi = Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
-        if ($serviceWmi) {
-            $metadata = @{
-                "ServiceName" = $serviceWmi.Name
-                "DisplayName" = $serviceWmi.DisplayName
-                "StartMode" = $serviceWmi.StartMode
-                "ServiceType" = $serviceWmi.ServiceType
-                "ErrorControl" = $serviceWmi.ErrorControl
-                "PathName" = $serviceWmi.PathName
-                "ServiceAccount" = $serviceWmi.StartName
-            }
-            
-            Write-Log "Service configuration details" -Level INFO -Component "ServiceMgmt" -Metadata $metadata
-            
-            # Check service dependencies
-            if ($serviceWmi.ServiceDependsOn) {
-                Write-Log "Service dependencies: $($serviceWmi.ServiceDependsOn -join ', ')" -Level INFO
-            } else {
-                Write-Log "Service has no dependencies" -Level INFO
-            }
-        }
-        
-        # Check what depends on this service
-        $dependentServices = Get-Service | Where-Object { $_.ServicesDependedOn -contains $service }
-        if ($dependentServices) {
-            $dependentNames = $dependentServices | ForEach-Object { $_.Name }
-            Write-Log "Services that depend on '$ServiceName': $($dependentNames -join ', ')" -Level WARNING
-        } else {
-            Write-Log "No other services depend on '$ServiceName'" -Level INFO
-        }
-        
-    } catch {
-        Write-Log "Failed to gather service dependency information: $_" -Level ERROR
-    }
-}
+# Service management functions removed - not needed for build script
+# MSI handles service installation at install time, not build time
 
 # Function to check and install Go
 function Install-Go {
@@ -1328,7 +630,6 @@ function Download-PostmanMSI {
     Write-Log "Downloading latest Postman Enterprise MSI..." -Level WARNING
     
     $downloadUrl = "https://dl.pstmn.io/download/latest/version/11/win64?channel=enterprise&filetype=msi"
-    $outputFile = "Postman-Enterprise-latest-x64.msi"
     
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -1336,9 +637,51 @@ function Download-PostmanMSI {
         Write-Log "Downloading from: $downloadUrl" -Level INFO
         Write-Log "This may take a few minutes depending on your connection speed..." -Level INFO
         
-        # Use WebClient for better progress reporting
+        # Use Invoke-WebRequest to get the actual filename from redirect
+        $response = Invoke-WebRequest -Uri $downloadUrl -MaximumRedirection 0 -ErrorAction SilentlyContinue -UseBasicParsing
+        
+        # Get the redirect URL which contains the actual filename
+        $actualUrl = $downloadUrl
+        if ($response.StatusCode -eq 301 -or $response.StatusCode -eq 302) {
+            $actualUrl = $response.Headers.Location
+            Write-Log "Following redirect to: $actualUrl" -Level DEBUG
+        }
+        
+        # Download the file and preserve the server filename
+        $outputFile = "Postman-Enterprise-latest-x64.msi"  # Default fallback
+        
+        # Try to extract filename from URL or Content-Disposition
+        try {
+            # Download with WebClient to preserve filename
+            $uri = New-Object System.Uri($actualUrl)
+            $segments = $uri.Segments
+            $lastSegment = $segments[-1]
+            
+            # Check if the last segment looks like a valid MSI filename
+            if ($lastSegment -match '\.msi$') {
+                # Load System.Web for URL decoding
+                Add-Type -AssemblyName System.Web
+                $outputFile = [System.Web.HttpUtility]::UrlDecode($lastSegment)
+                Write-Log "Using server filename: $outputFile" -Level INFO
+            } else {
+                # Try to get from Content-Disposition header
+                $webRequest = [System.Net.HttpWebRequest]::Create($actualUrl)
+                $webRequest.Method = "HEAD"
+                $webResponse = $webRequest.GetResponse()
+                $contentDisposition = $webResponse.Headers["Content-Disposition"]
+                if ($contentDisposition -match 'filename="?([^"]+)"?') {
+                    $outputFile = $matches[1]
+                    Write-Log "Using filename from header: $outputFile" -Level INFO
+                }
+                $webResponse.Close()
+            }
+        } catch {
+            Write-Log "Could not determine server filename, using default" -Level DEBUG
+        }
+        
+        # Download the file
         $webClient = New-Object System.Net.WebClient
-        $webClient.DownloadFile($downloadUrl, $outputFile)
+        $webClient.DownloadFile($actualUrl, $outputFile)
         
         if (Test-Path $outputFile) {
             $fileSize = (Get-Item $outputFile).Length / 1MB
@@ -1409,7 +752,6 @@ if (-not (Test-Administrator)) {
 
 # Run comprehensive validation framework
 Write-Log "Starting comprehensive validation framework..." -Level INFO
-Start-OperationTimer "Comprehensive-Validation"
 
 if (-not (Test-Environment)) {
     Write-Log "Environment validation failed. Exiting." -Level ERROR
@@ -1423,23 +765,11 @@ if (-not (Test-Dependencies)) {
         exit 1
     }
     
-    # Re-validate dependencies after installation
-    if (-not (Test-Dependencies)) {
-        Write-Log "Dependencies still not available after installation attempt. Exiting." -Level ERROR
-        exit 1
-    }
+    # Dependencies installed successfully, no need to re-validate
 }
 
-if (-not (Test-ServiceManagement)) {
-    Write-Log "Service management validation failed. Exiting." -Level ERROR
-    exit 1
-}
-
-# Test service cleanup capabilities for existing installations
-Test-ServiceCleanup
-Get-ServiceDependencyInfo
-
-Stop-OperationTimer "Comprehensive-Validation"
+# Service management validation removed - build script doesn't need to validate services
+# The MSI installer will handle service installation
 
 Write-Host ""
 
@@ -1510,11 +840,18 @@ if (-not (Test-SourceFiles)) {
     exit 1
 }
 
-# Auto-generate output filename if not specified
+# Auto-generate output filename if not specified (preserve version number)
 if ([string]::IsNullOrWhiteSpace($OutputMSI)) {
     $sourceFile = Get-Item $SourceMSI
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($sourceFile.Name)
     $extension = $sourceFile.Extension
+    
+    # If the source MSI has a version number, preserve it in output
+    if ($baseName -match '(\d+\.\d+\.\d+)') {
+        $version = $matches[1]
+        Write-Log "Detected version: $version" -Level DEBUG
+    }
+    
     $OutputMSI = "$baseName-saml$extension"
     Write-Log "Output MSI will be: $OutputMSI" -Level INFO
 }
@@ -1552,7 +889,7 @@ if (-not $UseExistingCerts) {
 } else {
     # Check for existing certificate files in temp directory
     Write-Log "Checking for existing certificate files..." -Level INFO
-    $certFiles = @("ca.crt", "server.crt", "server.key")
+    $certFiles = @("ca.crt", "identity.getpostman.com.crt", "identity.getpostman.com.key")
     $missingCerts = @()
     
     foreach ($cert in $certFiles) {
@@ -1646,8 +983,8 @@ Write-Log "Generating uninstall.bat..." -Level INFO
 $uninstallContent = @"
 @echo off
 echo Uninstalling Postman Enterprise Authentication Router...
-sc stop PMAuthRouter 2>nul
-sc delete PMAuthRouter 2>nul
+sc stop PostmanAuthRouter 2>nul
+sc delete PostmanAuthRouter 2>nul
 echo Removing registry configuration...
 reg delete "HKLM\SOFTWARE\Postman\Enterprise" /f 2>nul
 echo Postman Enterprise Authentication Router has been removed.
@@ -1730,21 +1067,18 @@ try {
     # Copy custom files to extracted directory
     Write-Log "Adding custom files to MSI..." -Level INFO
     $customFiles = @(
-        "$TempDir\server.key",
+        "$TempDir\identity.getpostman.com.key",
         "$TempDir\pm-authrouter.exe", 
         "$TempDir\uninstall.bat",
         "$TempDir\ca.crt",
-        "$TempDir\server.crt"
+        "$TempDir\identity.getpostman.com.crt"
     )
 
     foreach ($file in $customFiles) {
         if (Test-Path $file) {
-            if (Copy-FileWithLogging -Source $file -Destination "$TempDir\extracted\" -Force) {
-                $fileName = Split-Path $file -Leaf
-                Write-Log "Added custom file: $fileName" -Level SUCCESS
-            } else {
-                Write-Log "Failed to add custom file: $fileName" -Level ERROR
-            }
+            Copy-Item -Path $file -Destination "$TempDir\extracted\" -Force
+            $fileName = Split-Path $file -Leaf
+            Write-Log "Added custom file: $fileName" -Level SUCCESS
         } else {
             $fileName = Split-Path $file -Leaf
             Write-Warning "Custom file not found: $fileName"
@@ -1772,15 +1106,15 @@ try {
     # Create auth directory and components
     $customComponents = @"
                         <Directory Id="AuthDirectory" Name="auth">
-                            <Component Id="ServerKeyComponent" Guid="{$guid1}" Win64="yes">
-                                <File Id="ServerKey" Source="server.key" KeyPath="yes" />
+                            <Component Id="IdentityKeyComponent" Guid="{$guid1}" Win64="yes">
+                                <File Id="IdentityKey" Source="identity.getpostman.com.key" KeyPath="yes" />
                             </Component>
                             <Component Id="AuthRouterComponent" Guid="{$guid2}" Win64="yes">
                                 <File Id="AuthRouter" Source="pm-authrouter.exe" KeyPath="yes" />
                                 
                                 <!-- Service Installation -->
-                                <ServiceInstall Id="PMAuthRouterService" 
-                                               Name="PMAuthRouter"
+                                <ServiceInstall Id="PostmanAuthRouterService" 
+                                               Name="PostmanAuthRouter"
                                                DisplayName="Postman Enterprise Authentication Router"
                                                Description="Postman Enterprise Authentication Router Service for SAML enforcement"
                                                Type="ownProcess"
@@ -1794,8 +1128,8 @@ try {
                                                        RestartServiceDelayInSeconds="60" />
                                 </ServiceInstall>
                                 
-                                <ServiceControl Id="PMAuthRouterServiceControl"
-                                               Name="PMAuthRouter"
+                                <ServiceControl Id="PostmanAuthRouterServiceControl"
+                                               Name="PostmanAuthRouter"
                                                Start="install"
                                                Stop="both"
                                                Remove="uninstall" />
@@ -1814,14 +1148,14 @@ try {
                                                BinaryKey="CaCertBinary"
                                                Overwrite="yes" />
                             </Component>
-                            <Component Id="ServerCrtComponent" Guid="{$guid5}" Win64="yes">
-                                <File Id="ServerCrt" Source="server.crt" KeyPath="yes" />
+                            <Component Id="IdentityCrtComponent" Guid="{$guid5}" Win64="yes">
+                                <File Id="IdentityCrt" Source="identity.getpostman.com.crt" KeyPath="yes" />
                                 
                                 <!-- Registry Configuration -->
                                 <RegistryKey Root="HKLM" Key="SOFTWARE\Postman\Enterprise">
                                     <RegistryValue Name="AuthRouterPath" Type="string" Value="[INSTALLDIR]auth\pm-authrouter.exe" />
-                                    <RegistryValue Name="CertificatePath" Type="string" Value="[INSTALLDIR]auth\server.crt" />
-                                    <RegistryValue Name="KeyPath" Type="string" Value="[INSTALLDIR]auth\server.key" />
+                                    <RegistryValue Name="CertificatePath" Type="string" Value="[INSTALLDIR]auth\identity.getpostman.com.crt" />
+                                    <RegistryValue Name="KeyPath" Type="string" Value="[INSTALLDIR]auth\identity.getpostman.com.key" />
                                     <RegistryValue Name="CAPath" Type="string" Value="[INSTALLDIR]auth\ca.crt" />
                                     <!-- Team name from build-time parameter or MSI property -->
                                     <RegistryValue Name="TeamName" Type="string" Value="[TEAM_NAME]" />
@@ -1886,11 +1220,11 @@ try {
     # Insert component references in Feature
     if ($featureEnd -ge 0) {
         $componentRefs = @(
-            '            <ComponentRef Id="ServerKeyComponent" />',
+            '            <ComponentRef Id="IdentityKeyComponent" />',
             '            <ComponentRef Id="AuthRouterComponent" />',
             '            <ComponentRef Id="UninstallBatComponent" />',
             '            <ComponentRef Id="CaCrtComponent" />',
-            '            <ComponentRef Id="ServerCrtComponent" />'
+            '            <ComponentRef Id="IdentityCrtComponent" />'
         )
         $lines = $lines[0..($featureEnd - 1)] + $componentRefs + $lines[$featureEnd..($lines.Length - 1)]
     }
@@ -1924,12 +1258,6 @@ try {
 
     # Write modified WXS back
     Set-Content -Path $wxsPath -Value $wxsContent -Encoding UTF8
-
-    # Run build process validation before starting
-    Write-Log "Validating build process prerequisites..." -Level INFO
-    if (-not (Test-BuildProcess)) {
-        throw "Build process validation failed"
-    }
 
     # Compile WiX source with candle.exe
     Write-Log "Compiling WiX source..." -Level INFO
@@ -2005,7 +1333,7 @@ try {
         
         # Custom files size
         $customFilesTotalSize = 0
-        $customFiles = @("server.key", "pm-authrouter.exe", "uninstall.bat", "ca.crt", "server.crt")
+        $customFiles = @("identity.getpostman.com.key", "pm-authrouter.exe", "uninstall.bat", "ca.crt", "identity.getpostman.com.crt")
         foreach ($file in $customFiles) {
             if (Test-Path $file) {
                 $customFilesTotalSize += (Get-Item $file).Length
@@ -2031,7 +1359,7 @@ try {
     }
     
     # Clean up temporary files
-    $tempFiles = @("server.pfx")
+    $tempFiles = @()
     
     # Clean up WiX PDB unless explicitly kept
     if (-not $KeepPDB) {

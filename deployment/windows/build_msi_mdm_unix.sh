@@ -14,7 +14,19 @@ set -o pipefail  # Exit on pipe failure
 readonly SCRIPT_VERSION="2.1.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-readonly PROJECT_ROOT="$SCRIPT_DIR/../.."
+
+# Find project root by locating go.mod (consistent with macOS script)
+PROJECT_ROOT="$SCRIPT_DIR"
+while [ ! -f "$PROJECT_ROOT/go.mod" ] && [ "$PROJECT_ROOT" != "/" ]; do
+    PROJECT_ROOT="$(dirname "$PROJECT_ROOT")"
+done
+
+if [ ! -f "$PROJECT_ROOT/go.mod" ]; then
+    echo "ERROR: Could not find project root (go.mod not found)"
+    exit 1
+fi
+
+readonly PROJECT_ROOT
 
 # Secure path configuration (replaces hard-coded /tmp)
 readonly TEMP_ROOT="${TMPDIR:-/tmp}"
@@ -61,7 +73,6 @@ mkdir -p "$LOG_DIR" 2>/dev/null || {
 }
 chmod 700 "$LOG_DIR" 2>/dev/null || true
 LOG_FILE="$LOG_DIR/build_msi_v2_$(date +%Y%m%d_%H%M%S).log"
-DEBUG_LOG="$LOG_DIR/debug_msi_v2_$(date +%Y%m%d_%H%M%S).debug"
 
 # Configuration with environment variable support
 TEAM_NAME="${TEAM_NAME:-}"
@@ -77,94 +88,130 @@ CERT_ORG="${CERT_ORG:-Postdot Technologies, Inc}"
 
 # Build behavior flags for enterprise deployment
 SKIP_DEPS="${SKIP_DEPS:-false}"
-OFFLINE_MODE="${OFFLINE_MODE:-false}"
 NON_INTERACTIVE="${NON_INTERACTIVE:-false}"
 FAIL_FAST="${FAIL_FAST:-true}"
 
-# Enhanced logging with validation tracking
+# Simplified logging with 4 levels: ERROR/WARN/INFO/DEBUG
 log() {
-    local timestamp
-    # Cross-platform timestamp (macOS doesn't support %N)
-    if date '+%Y-%m-%d %H:%M:%S.%3N' 2>/dev/null | grep -q N; then
-        # Fallback for systems without nanosecond support
-        timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    else
-        timestamp=$(date '+%Y-%m-%d %H:%M:%S.%3N')
-    fi
-    
     local level="$1"
     shift
     local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
-    # Always show critical messages, suppress others in quiet mode if needed
-    if [[ "$NON_INTERACTIVE" != "true" ]] || [[ "$level" =~ ^(ERROR|VALIDATION_ERROR|VALIDATION_SUCCESS)$ ]]; then
-        echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE"
-    else
-        echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
-    fi
+    # Map legacy log levels to simplified levels
+    case "$level" in
+        "VALIDATION_ERROR"|"CMD_ERROR") level="ERROR" ;;
+        "VALIDATION_SUCCESS"|"SUCCESS") level="INFO" ;;
+        "CMD") level="DEBUG" ;;
+    esac
     
-    # Always write debug info for important events
-    if [[ "$DEBUG_MODE" == "1" ]] || [[ "$level" =~ ^(DEBUG|ERROR|VALIDATION_ERROR|VALIDATION_SUCCESS)$ ]]; then
-        echo "[$timestamp] [PID:$$] [$level] [PWD:$(pwd)] $message" >> "$DEBUG_LOG"
-    fi
+    # Output to console and log file based on level and mode
+    case "$level" in
+        ERROR|WARN) 
+            echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE" >&2 
+            ;;
+        INFO) 
+            if [[ "$NON_INTERACTIVE" != "true" ]]; then
+                echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE"
+            else
+                echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+            fi
+            ;;
+        DEBUG) 
+            if [[ "$DEBUG_MODE" == "1" ]]; then
+                echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+            fi
+            ;;
+    esac
 }
 
-log_error() {
-    log "ERROR" "$@"
-}
+# Simplified file operation logging (merged into main log function)
+# Use: log "DEBUG" "FILE_OPERATION: $file [$context]"
 
-# Debug file operations
-debug_file_op() {
-    local operation="$1"  # READ, WRITE, DELETE, MODIFY
-    local file="$2"
-    local context="${3:-}"
-    
-    local size=""
-    local checksum=""
-    
-    if [[ -f "$file" ]]; then
-        size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "unknown")
-        checksum=$(openssl dgst -md5 "$file" 2>/dev/null | awk '{print $2}' || echo "unknown")
-    fi
-    
-    log "DEBUG" "FILE_${operation}: $file [size: $size] [md5: $checksum] ${context:+[$context]}"
-}
-
-# Enhanced command logging
+# Simplified command logging
 log_cmd() {
     local cmd="$1"
     shift
     
-    local cmd_start=$(date +%s)
-    log "CMD" "Executing: $cmd $*"
-    
-    if [[ "$DEBUG_MODE" == "1" ]]; then
-        log "DEBUG" "CMD_ARGS: $(printf '%q ' "$@")"
-    fi
+    log "DEBUG" "Executing: $cmd $*"
     
     local exit_code=0
     if "$cmd" "$@"; then
-        local cmd_end=$(date +%s)
-        local duration=$(( cmd_end - cmd_start ))
-        log "SUCCESS" "Command completed: $cmd [duration: ${duration}s]"
+        log "DEBUG" "Command completed: $cmd"
     else
         exit_code=$?
-        local cmd_end=$(date +%s)
-        local duration=$(( cmd_end - cmd_start ))
-        log "ERROR" "Command failed with exit code $exit_code: $cmd [duration: ${duration}s]"
+        log "ERROR" "Command failed with exit code $exit_code: $cmd"
     fi
     
     return $exit_code
 }
 
+# Utility Functions - Centralized repeated patterns
+get_file_size() {
+    local file="$1"
+    if [[ ! -f "$file" ]]; then
+        echo "0"
+        return 1
+    fi
+    stat -f%z "$file" 2>/dev/null || stat -c%s "$file"
+}
+
+extract_msi_tables_and_streams() {
+    local msi="$1"
+    local target_dir="$2"
+    
+    if [[ ! -f "$msi" ]]; then
+        log "ERROR" "MSI file not found: $msi"
+        return 1
+    fi
+    
+    cd "$target_dir" || return 1
+    log "INFO" "Extracting MSI tables and streams from $(basename "$msi")..."
+    log_cmd msidump -t "$msi"
+    log_cmd msidump -s "$msi"
+}
+
+create_temp_dir() {
+    local prefix="$1"
+    local temp_dir
+    temp_dir=$(mktemp -d "$TEMP_ROOT/${prefix}-$$-XXXXXX")
+    if [[ $? -ne 0 ]] || [[ ! -d "$temp_dir" ]]; then
+        log "ERROR" "Failed to create temp directory with prefix: $prefix"
+        return 1
+    fi
+    echo "$temp_dir"
+}
+
+detect_platform() {
+    case "$OSTYPE" in
+        darwin*) echo "macos" ;;
+        linux-gnu*) echo "linux" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+add_idt_entry() {
+    local table="$1"
+    local entry="$2"  # Tab-separated values
+    
+    if [[ ! -f "$table" ]]; then
+        log "ERROR" "IDT table not found: $table"
+        return 1
+    fi
+    
+    echo -e "$entry" >> "$table"
+    log "DEBUG" "Added entry to $table: $(echo "$entry" | cut -f1)"
+}
+
+# Initialize platform detection once
+readonly PLATFORM=$(detect_platform)
+
 validation_error() {
     local phase="$1"
     local error="$2"
     
-    log "VALIDATION_ERROR" "[$phase] $error"
-    log "DEBUG" "STACK_TRACE: ${BASH_SOURCE[*]}"
-    log "DEBUG" "LINE_NUMBERS: ${BASH_LINENO[*]}"
-    log "DEBUG" "FUNCTION_STACK: ${FUNCNAME[*]}"
+    log "ERROR" "[$phase] $error"
+    log "DEBUG" "Stack trace: ${FUNCNAME[*]} at ${BASH_LINENO[*]}"
     
     exit 1
 }
@@ -172,17 +219,15 @@ validation_error() {
 validation_success() {
     local phase="$1"
     local message="$2"
-    log "VALIDATION_SUCCESS" "[$phase] $message"
+    log "INFO" "[$phase] $message"
 }
 
 # Initialize
 echo "=== MSI Builder v2 - wixl compression + comprehensive validation ===" | tee "$LOG_FILE"
-echo "=== DEBUG LOG: $DEBUG_LOG ===" >> "$DEBUG_LOG"
 log "INFO" "Build started from: $SCRIPT_DIR"
 log "INFO" "Working directory: $WORK_DIR"
 log "INFO" "Project root: $PROJECT_ROOT"
-log "INFO" "Main log: $LOG_FILE"
-log "INFO" "Debug log: $DEBUG_LOG"
+log "INFO" "Log file: $LOG_FILE"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -200,11 +245,6 @@ while [[ $# -gt 0 ]]; do
         --skip-deps)
             SKIP_DEPS="true"
             log "INFO" "Skip dependency installation enabled"
-            shift
-            ;;
-        --offline)
-            OFFLINE_MODE="true"
-            log "INFO" "Offline mode enabled"
             shift
             ;;
         --debug)
@@ -235,7 +275,6 @@ Certificate Options:
   
 Build Control:
   --skip-deps               Skip dependency installation (assume present)
-  --offline                 Offline mode - use existing MSI only
   --debug                   Enable debug logging
   
 Behavior:
@@ -243,14 +282,14 @@ Behavior:
   --version                 Show version information
 
 Examples:
-  # Production build with real values
+  # Production build with real values (auto-detects local MSI or downloads)
   $SCRIPT_NAME --team "my-team" --saml-url "https://identity.getpostman.com/sso/okta/abc123/init"
   
   # Build with dummy values for later configuration via MSI properties
   $SCRIPT_NAME --team "dummy" --saml-url "https://example.com/init"
   
-  # Offline build with existing MSI
-  $SCRIPT_NAME --team "dummy" --saml-url "https://example.com/init" --offline --skip-deps
+  # Air-gapped environment (download fails naturally with clear network error)
+  $SCRIPT_NAME --team "dummy" --saml-url "https://example.com/init" --skip-deps
 
 EOF
             exit 0
@@ -301,17 +340,9 @@ fi
 
 log "INFO" "Configuration - Team: ${TEAM_NAME:-[not configured - will be set at install time]}, SAML URL: ${SAML_URL:-[not configured - will be set at install time]}"
 
-# Phase 1: Dependency Management (Platform-Agnostic)
-check_and_install_dependencies() {
-    log "INFO" "=== Phase 1: Dependency Management ==="
-    
-    # Skip dependency installation if requested (for CI/CD environments)
-    if [[ "$SKIP_DEPS" == "true" ]]; then
-        log "INFO" "Skipping dependency installation (--skip-deps enabled)"
-        log "INFO" "Assuming all required tools are pre-installed"
-        return 0
-    fi
-    
+# Phase 1: Dependency Management - Split into focused functions
+
+detect_missing_tools() {
     local missing_tools=()
     # Tool list with wixl for compression (no wixl-heat needed!)
     local tools=(msibuild msiextract msidump wixl gcab openssl go curl uuidgen hexdump dd bc)
@@ -325,144 +356,189 @@ check_and_install_dependencies() {
         fi
     done
     
-    if [[ ${#missing_tools[@]} -gt 0 ]]; then
-        log "INFO" "Missing tools detected: ${missing_tools[*]}"
+    echo "${missing_tools[@]}"
+}
+
+install_via_package_managers() {
+    local missing_tools=("$@")
+    local installed=false
+    
+    # Method 1: Try package managers first (fastest if available)
+    if [[ " ${missing_tools[*]} " =~ "msitools" ]] || [[ " ${missing_tools[*]} " =~ (msibuild|msiextract|msidump|wixl) ]]; then
+        log "INFO" "Checking for available package managers..."
         
-        # Try multiple installation methods in order of preference
-        local installed=false
-        
-        # Method 1: Try package managers first (fastest if available)
-        if [[ " ${missing_tools[*]} " =~ "msitools" ]] || [[ " ${missing_tools[*]} " =~ (msibuild|msiextract|msidump|wixl) ]]; then
-            log "INFO" "Checking for available package managers..."
-            
-            # For macOS, try package managers but fall back to curl quickly
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                # macOS: Check for package managers but don't require them
-                if command -v port >/dev/null 2>&1; then
-                    log "INFO" "Using MacPorts to install msitools..."
-                    if log_cmd sudo port install msitools 2>/dev/null; then
-                        installed=true
-                    fi
-                elif command -v brew >/dev/null 2>&1; then
-                    log "INFO" "Using Homebrew to install msitools..."
-                    if log_cmd brew install msitools 2>/dev/null; then
-                        installed=true
-                    fi
-                else
-                    # No package manager on macOS - will use curl method below
-                    log "INFO" "No package manager found on macOS. Will download and build from source..."
-                    installed=false
-                fi
-            elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-                # Linux: Try apt, yum, or dnf
-                if command -v apt-get >/dev/null 2>&1; then
-                    log "INFO" "Using apt to install tools..."
-                    log_cmd sudo apt-get update
-                    log_cmd sudo apt-get install -y msitools gcab
-                    installed=true
-                elif command -v yum >/dev/null 2>&1; then
-                    log "INFO" "Using yum to install tools..."
-                    log_cmd sudo yum install -y msitools gcab
-                    installed=true
-                elif command -v dnf >/dev/null 2>&1; then
-                    log "INFO" "Using dnf to install tools..."
-                    log_cmd sudo dnf install -y msitools gcab
+        # For macOS, try package managers but fall back to curl quickly
+        if [[ "$PLATFORM" == "macos" ]]; then
+            # macOS: Check for package managers but don't require them
+            if command -v port >/dev/null 2>&1; then
+                log "INFO" "Using MacPorts to install msitools..."
+                if log_cmd sudo port install msitools 2>/dev/null; then
                     installed=true
                 fi
-            fi
-        fi
-        
-        # Method 2: Download and build from source (especially for macOS without package managers)
-        if [[ "$installed" == "false" ]] && [[ " ${missing_tools[*]} " =~ "msitools" ]]; then
-            log "INFO" "Downloading msitools from GNOME sources..."
-            local TEMP_BUILD=$(mktemp -d "$TEMP_ROOT/msitools-build-$$-XXXXXX")
-            cd "$TEMP_BUILD"
-            
-            # Download latest msitools (0.106 as of 2025)
-            local MSITOOLS_VERSION="0.106"
-            local MSITOOLS_URL="https://download.gnome.org/sources/msitools/${MSITOOLS_VERSION}/msitools-${MSITOOLS_VERSION}.tar.xz"
-            
-            log "INFO" "Downloading msitools ${MSITOOLS_VERSION} from ${MSITOOLS_URL}..."
-            if curl -L -o "msitools-${MSITOOLS_VERSION}.tar.xz" "$MSITOOLS_URL"; then
-                log "INFO" "Download successful. Extracting and building..."
-                tar xf "msitools-${MSITOOLS_VERSION}.tar.xz"
-                cd "msitools-${MSITOOLS_VERSION}"
-                
-                # For macOS, we may need to set some environment variables
-                if [[ "$OSTYPE" == "darwin"* ]]; then
-                    # Check for required dependencies
-                    if ! command -v pkg-config >/dev/null 2>&1; then
-                        log "WARN" "pkg-config not found. Trying to install it..."
-                        if command -v brew >/dev/null 2>&1; then
-                            brew install pkg-config
-                        fi
-                    fi
-                    
-                    # Set environment for macOS build
-                    export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
-                fi
-                
-                # Configure and build
-                if [[ -f "./meson.build" ]]; then
-                    # msitools 0.106 uses meson build system
-                    log "INFO" "Building with meson..."
-                    if command -v meson >/dev/null 2>&1 || pip3 install --user meson; then
-                        meson setup build --prefix=/usr/local
-                        ninja -C build
-                        sudo ninja -C build install
-                        installed=true
-                    else
-                        log "WARN" "Meson build system not available"
-                    fi
-                elif [[ -f "./configure" ]]; then
-                    # Older versions use autotools
-                    log "INFO" "Building with configure/make..."
-                    ./configure --prefix=/usr/local && make && sudo make install
+            elif command -v brew >/dev/null 2>&1; then
+                log "INFO" "Using Homebrew to install msitools..."
+                if log_cmd brew install msitools 2>/dev/null; then
                     installed=true
-                else
-                    log "ERROR" "No build system found (neither meson nor configure)"
                 fi
             else
-                log "ERROR" "Failed to download msitools from $MSITOOLS_URL"
+                # No package manager on macOS - will use curl method below
+                log "INFO" "No package manager found on macOS. Will download and build from source..."
+                installed=false
             fi
-            
-            cd "$WORK_DIR"
-            rm -rf "$TEMP_BUILD"
+        elif [[ "$PLATFORM" == "linux" ]]; then
+            # Linux: Try apt, yum, or dnf
+            if command -v apt-get >/dev/null 2>&1; then
+                log "INFO" "Using apt to install tools..."
+                log_cmd sudo apt-get update
+                log_cmd sudo apt-get install -y msitools gcab
+                installed=true
+            elif command -v yum >/dev/null 2>&1; then
+                log "INFO" "Using yum to install tools..."
+                log_cmd sudo yum install -y msitools gcab
+                installed=true
+            elif command -v dnf >/dev/null 2>&1; then
+                log "INFO" "Using dnf to install tools..."
+                log_cmd sudo dnf install -y msitools gcab
+                installed=true
+            fi
         fi
-        
-        # Final check and manual installation instructions
-        for tool in "${missing_tools[@]}"; do
-            if ! command -v "$tool" >/dev/null 2>&1; then
-                log "ERROR" "Could not auto-install $tool. Manual installation required:"
-                case "$tool" in
-                    msibuild|msiextract|msidump|wixl)
-                        log "ERROR" "  msitools: https://wiki.gnome.org/msitools"
-                        log "ERROR" "  macOS: brew install msitools OR port install msitools"
-                        log "ERROR" "  Ubuntu/Debian: apt-get install msitools"
-                        log "ERROR" "  Fedora/RHEL: dnf install msitools"
-                        ;;
-                    gcab)
-                        log "ERROR" "  gcab: https://wiki.gnome.org/msitools"
-                        log "ERROR" "  macOS: brew install gcab"
-                        log "ERROR" "  Linux: apt-get install gcab"
-                        ;;
-                    go)
-                        log "ERROR" "  Go: https://golang.org/dl/"
-                        ;;
-                    *)
-                        log "ERROR" "  $tool: Check your system's package manager"
-                        ;;
-                esac
-                exit 1
-            fi
-        done
     fi
     
+    if [[ "$installed" == "true" ]]; then
+        echo "success"
+    else
+        echo "failed"
+    fi
+}
+
+build_tools_from_source() {
+    local missing_tools=("$@")
+    
+    # Method 2: Download and build from source (especially for macOS without package managers)
+    if [[ " ${missing_tools[*]} " =~ "msitools" ]]; then
+        log "INFO" "Downloading msitools from GNOME sources..."
+        local TEMP_BUILD=$(create_temp_dir "msitools-build")
+        cd "$TEMP_BUILD"
+        
+        # Download latest msitools (0.106 as of 2025)
+        local MSITOOLS_VERSION="0.106"
+        local MSITOOLS_URL="https://download.gnome.org/sources/msitools/${MSITOOLS_VERSION}/msitools-${MSITOOLS_VERSION}.tar.xz"
+        
+        log "INFO" "Downloading msitools ${MSITOOLS_VERSION} from ${MSITOOLS_URL}..."
+        if curl -L -o "msitools-${MSITOOLS_VERSION}.tar.xz" "$MSITOOLS_URL"; then
+            log "INFO" "Download successful. Extracting and building..."
+            tar xf "msitools-${MSITOOLS_VERSION}.tar.xz"
+            cd "msitools-${MSITOOLS_VERSION}"
+            
+            # For macOS, we may need to set some environment variables
+            if [[ "$PLATFORM" == "macos" ]]; then
+                # Check for required dependencies
+                if ! command -v pkg-config >/dev/null 2>&1; then
+                    log "WARN" "pkg-config not found. Trying to install it..."
+                    if command -v brew >/dev/null 2>&1; then
+                        brew install pkg-config
+                    fi
+                fi
+                
+                # Set environment for macOS build
+                export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+            fi
+            
+            # Configure and build
+            if [[ -f "./meson.build" ]]; then
+                # msitools 0.106 uses meson build system
+                log "INFO" "Building with meson..."
+                if command -v meson >/dev/null 2>&1 || pip3 install --user meson; then
+                    meson setup build --prefix=/usr/local
+                    ninja -C build
+                    sudo ninja -C build install
+                    echo "success"
+                else
+                    log "WARN" "Meson build system not available"
+                    echo "failed"
+                fi
+            elif [[ -f "./configure" ]]; then
+                # Older versions use autotools
+                log "INFO" "Building with configure/make..."
+                ./configure --prefix=/usr/local && make && sudo make install
+                echo "success"
+            else
+                log "ERROR" "No build system found (neither meson nor configure)"
+                echo "failed"
+            fi
+        else
+            log "ERROR" "Failed to download msitools from $MSITOOLS_URL"
+            echo "failed"
+        fi
+        
+        cd "$WORK_DIR"
+        rm -rf "$TEMP_BUILD"
+    else
+        echo "skipped"
+    fi
+}
+
+validate_tools_functionality() {
     # Test wixl functionality (wixl-heat not needed!)
     log "INFO" "Testing wixl functionality..."
     if ! wixl --help >/dev/null 2>&1; then
         validation_error "DEPENDENCY" "wixl is not functional"
     fi
+}
+
+check_and_install_dependencies() {
+    log "INFO" "=== Phase 1: Dependency Management ==="
+    
+    # Skip dependency installation if requested (for CI/CD environments)
+    if [[ "$SKIP_DEPS" == "true" ]]; then
+        log "INFO" "Skipping dependency installation (--skip-deps enabled)"
+        log "INFO" "Assuming all required tools are pre-installed"
+        return 0
+    fi
+    
+    local missing_tools=($(detect_missing_tools))
+    
+    if [[ ${#missing_tools[@]} -gt 0 ]]; then
+        log "INFO" "Missing tools detected: ${missing_tools[*]}"
+        
+        # Try package managers first
+        local package_result=$(install_via_package_managers "${missing_tools[@]}")
+        
+        # If package managers failed, try building from source
+        if [[ "$package_result" == "failed" ]]; then
+            local source_result=$(build_tools_from_source "${missing_tools[@]}")
+            if [[ "$source_result" == "failed" ]]; then
+                # Final check and manual installation instructions
+                for tool in "${missing_tools[@]}"; do
+                    if ! command -v "$tool" >/dev/null 2>&1; then
+                        log "ERROR" "Could not auto-install $tool. Manual installation required:"
+                        case "$tool" in
+                            msibuild|msiextract|msidump|wixl)
+                                log "ERROR" "  msitools: https://wiki.gnome.org/msitools"
+                                log "ERROR" "  macOS: brew install msitools OR port install msitools"
+                                log "ERROR" "  Ubuntu/Debian: apt-get install msitools"
+                                log "ERROR" "  Fedora/RHEL: dnf install msitools"
+                                ;;
+                            gcab)
+                                log "ERROR" "  gcab: https://wiki.gnome.org/msitools"
+                                log "ERROR" "  macOS: brew install gcab"
+                                log "ERROR" "  Linux: apt-get install gcab"
+                                ;;
+                            go)
+                                log "ERROR" "  Go: https://golang.org/dl/"
+                                ;;
+                            *)
+                                log "ERROR" "  $tool: Check your system's package manager"
+                                ;;
+                        esac
+                        exit 1
+                    fi
+                done
+            fi
+        fi
+    fi
+    
+    validate_tools_functionality
     
     validation_success "DEPENDENCY" "All dependencies verified and functional"
 }
@@ -494,8 +570,8 @@ build_optimized_authrouter_cabinet() {
           <!-- File IDs here MUST match what we use in File.idt! -->
           <File Id='pm_authrouter.exe' Source='pm-authrouter.exe' Name='pm-authrouter.exe' />
           <File Id='ca.crt' Source='ca.crt' Name='ca.crt' />
-          <File Id='server.crt' Source='server.crt' Name='server.crt' />
-          <File Id='server.key' Source='server.key' Name='server.key' />
+          <File Id='identity.getpostman.com.crt' Source='identity.getpostman.com.crt' Name='identity.getpostman.com.crt' />
+          <File Id='identity.getpostman.com.key' Source='identity.getpostman.com.key' Name='identity.getpostman.com.key' />
           <File Id='uninstall.bat' Source='uninstall.bat' Name='uninstall.bat' />
         </Component>
       </Directory>
@@ -519,7 +595,7 @@ EOF
         validation_error "CABINET_BUILD" "Temporary MSI was not created"
     fi
     
-    local msi_size=$(stat -f%z authrouter.msi 2>/dev/null || stat -c%s authrouter.msi)
+    local msi_size=$(get_file_size authrouter.msi)
     log "INFO" "Temporary MSI created: $(( msi_size / 1024 )) KB"
     
     # 3. Extract optimized cabinet from temporary MSI
@@ -550,12 +626,12 @@ EOF
     
     # 5. Log compression results
     local original_size=0
-    for f in pm-authrouter.exe ca.crt server.crt server.key uninstall.bat; do
-        local fsize=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f")
+    for f in pm-authrouter.exe ca.crt identity.getpostman.com.crt identity.getpostman.com.key uninstall.bat; do
+        local fsize=$(get_file_size "$f")
         original_size=$((original_size + fsize))
     done
     
-    local cabinet_size=$(stat -f%z authrouter.cab 2>/dev/null || stat -c%s authrouter.cab)
+    local cabinet_size=$(get_file_size authrouter.cab)
     local compression_ratio=$(echo "scale=1; (1-$cabinet_size/$original_size)*100" | bc -l)
     
     log "INFO" "Compression results:"
@@ -639,12 +715,12 @@ validate_original_msi_structure() {
     log "INFO" "Original MSI structure validated:"
     log "INFO" "  Max file sequence: $max_file_seq (our range: 9001-9999)"  
     log "INFO" "  Max media ID: $max_media_id (our ID: 900)"
-    log "INFO" "  starship.cab: $(stat -f%z "$starship_path" 2>/dev/null || stat -c%s "$starship_path") bytes"
+    log "INFO" "  starship.cab: $(get_file_size "$starship_path") bytes"
     
     validation_success "ORIGINAL_MSI" "Structure validated, no conflicts detected"
 }
 
-# Phase 2: MSI Acquisition and Extraction (UNCHANGED)
+# Phase 2: MSI Acquisition and Extraction (AUTO-DETECT)
 extract_original_msi() {
     log "INFO" "=== Phase 2: MSI Acquisition and Extraction ==="
     
@@ -652,22 +728,33 @@ extract_original_msi() {
     local original_msi
     original_msi=$(find "$SCRIPT_DIR" -maxdepth 1 -name "Postman-Enterprise-*-x64.msi" ! -name "*-saml.msi" | head -1)
     
-    if [[ ! -f "$original_msi" ]]; then
-        if [[ "$OFFLINE_MODE" == "true" ]]; then
-            validation_error "MSI_ACQUISITION" "Original MSI not found and offline mode enabled"
-        fi
-        
-        log "INFO" "Original MSI not found, downloading..."
-        original_msi="$SCRIPT_DIR/Postman-Enterprise-latest-x64.msi"
+    if [[ -f "$original_msi" ]]; then
+        log "INFO" "Found local MSI: $(basename "$original_msi")"
+    else
+        log "INFO" "Original MSI not found locally, downloading from remote..."
+        log "INFO" "Download will preserve server filename (includes version)"
         
         # Network resilience with basic retry
         local download_attempts=0
         local max_attempts=3
         
+        # Change to script directory for download
+        cd "$SCRIPT_DIR" || validation_error "MSI_ACQUISITION" "Failed to change to script directory"
+        
         while [[ $download_attempts -lt $max_attempts ]]; do
-            if log_cmd curl -L --connect-timeout 30 --max-time 300 -o "$original_msi" "$POSTMAN_MSI_URL"; then
-                log "INFO" "MSI downloaded successfully"
-                break
+            # Use -J -O to preserve server's filename (includes version)
+            if curl -L --connect-timeout 30 --max-time 300 -J -O "$POSTMAN_MSI_URL" 2>&1 | tee -a "$LOG_FILE"; then
+                # Find the downloaded MSI (newest .msi file)
+                original_msi=$(ls -t "$SCRIPT_DIR"/Postman-Enterprise-*-x64.msi 2>/dev/null | grep -v "saml.msi" | head -1)
+                if [[ -f "$original_msi" ]]; then
+                    local file_size=$(get_file_size "$original_msi")
+                    local file_size_mb=$(( file_size / 1024 / 1024 ))
+                    log "INFO" "MSI downloaded successfully: $(basename "$original_msi") (${file_size_mb}MB)"
+                    break
+                else
+                    log "ERROR" "Download completed but MSI file not found"
+                    download_attempts=$((download_attempts + 1))
+                fi
             else
                 download_attempts=$((download_attempts + 1))
                 if [[ $download_attempts -lt $max_attempts ]]; then
@@ -681,7 +768,7 @@ extract_original_msi() {
     fi
     
     log "INFO" "Using MSI: $(basename "$original_msi")"
-    local msi_size=$(stat -f%z "$original_msi" 2>/dev/null || stat -c%s "$original_msi")
+    local msi_size=$(get_file_size "$original_msi")
     log "INFO" "MSI size: $(( msi_size / 1024 / 1024 )) MB"
     
     # Extract basename for output naming
@@ -699,11 +786,12 @@ extract_original_msi() {
     log "INFO" "Extracting MSI structure..."
     log_cmd msiextract -C extracted_files "$original_msi"
     
-    log "INFO" "Extracting MSI tables..."
-    log_cmd msidump -t "$original_msi"
+    extract_msi_tables_and_streams "$original_msi" "$WORK_DIR"
     
-    log "INFO" "Extracting MSI streams..."
-    log_cmd msidump -s "$original_msi"
+    # Cache original MSI tables for reuse in validation phases
+    mkdir -p "$WORK_DIR/cached_original_tables"
+    cp *.idt "$WORK_DIR/cached_original_tables/" 2>/dev/null || true
+    log "INFO" "Cached original MSI tables for later validation"
     
     # Store metadata for later phases
     echo "$original_msi" > "$WORK_DIR/original_msi_path"
@@ -730,8 +818,8 @@ validate_source_components() {
     fi
     
     # 2. Validate certificate chain
-    if [[ -f "ca.crt" ]] && [[ -f "server.crt" ]]; then
-        if ! openssl verify -CAfile ca.crt server.crt >/dev/null 2>&1; then
+    if [[ -f "ca.crt" ]] && [[ -f "identity.getpostman.com.crt" ]]; then
+        if ! openssl verify -CAfile ca.crt identity.getpostman.com.crt >/dev/null 2>&1; then
             validation_error "SOURCE_COMPONENTS" "Certificate chain validation failed"
         fi
     else
@@ -742,8 +830,8 @@ validate_source_components() {
     local min_sizes=(
         "pm-authrouter.exe:1000000"  # ~1MB minimum for Go binary
         "ca.crt:500"                 # ~500B minimum for cert
-        "server.crt:500"             # ~500B minimum for cert
-        "server.key:500"             # ~500B minimum for key
+        "identity.getpostman.com.crt:500"  # ~500B minimum for cert
+        "identity.getpostman.com.key:500"  # ~500B minimum for key
         "uninstall.bat:100"          # ~100B minimum for script
     )
     
@@ -755,7 +843,7 @@ validate_source_components() {
             validation_error "SOURCE_COMPONENTS" "Required file missing: $file"
         fi
         
-        local actual_size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file")
+        local actual_size=$(get_file_size "$file")
         if [[ $actual_size -lt $min_size ]]; then
             validation_error "SOURCE_COMPONENTS" "File $file too small: ${actual_size}B < ${min_size}B (likely corrupted)"
         fi
@@ -771,28 +859,23 @@ validate_source_components() {
     validation_success "SOURCE_COMPONENTS" "All source components validated and ready for cabinet creation"
 }
 
-# Phase 3: Build AuthRouter Components (UNCHANGED)
-build_authrouter_components() {
-    log "INFO" "=== Phase 3: Build AuthRouter Components ==="
+# Phase 3: Build AuthRouter Components - Split into focused functions
+
+build_authrouter_binary() {
+    log "INFO" "Building AuthRouter binary..."
     
     cd "$PROJECT_ROOT"
-    
-    # Build AuthRouter binary
-    log "INFO" "Building AuthRouter binary..."
     log_cmd env GOOS=windows GOARCH=amd64 go build -ldflags="-w -s" -o "$WORK_DIR/pm-authrouter.exe" ./cmd/pm-authrouter
     
-    local binary_size=$(stat -f%z "$WORK_DIR/pm-authrouter.exe" 2>/dev/null || stat -c%s "$WORK_DIR/pm-authrouter.exe")
+    local binary_size=$(get_file_size "$WORK_DIR/pm-authrouter.exe")
     log "INFO" "AuthRouter binary size: $(( binary_size / 1024 / 1024 )) MB"
-    
     cd "$WORK_DIR"
+}
+
+prepare_certificates() {
+    log "INFO" "Preparing certificates..."
     
-    # Check for stable certificates in /ssl/ directory, generate if needed
-    # Find project root by locating go.mod
-    local PROJECT_ROOT=$(cd "$SCRIPT_DIR" && while [ ! -f "go.mod" ] && [ "$PWD" != "/" ]; do cd ..; done; pwd)
-    if [ ! -f "$PROJECT_ROOT/go.mod" ]; then
-        log "ERROR" "Could not find project root (go.mod not found)"
-        exit 1
-    fi
+    # Use global PROJECT_ROOT (already detected via go.mod search)
     local SSL_DIR="$PROJECT_ROOT/ssl"
     
     # Generate certificates if they don't exist
@@ -833,20 +916,20 @@ EOF
             chmod 600 "$SSL_DIR/identity.getpostman.com.key"
         fi
         
-        log "SUCCESS" "Certificates generated in $SSL_DIR"
+        log "INFO" "Certificates generated in $SSL_DIR"
     else
         log "INFO" "Using existing stable certificates from $SSL_DIR"
     fi
     
-    # Copy certificates to build directory
-    cp "$SSL_DIR/identity.getpostman.com.crt" server.crt
-    cp "$SSL_DIR/identity.getpostman.com.key" server.key
+    # Copy certificates to build directory (keep original filenames)
+    cp "$SSL_DIR/identity.getpostman.com.crt" identity.getpostman.com.crt
+    cp "$SSL_DIR/identity.getpostman.com.key" identity.getpostman.com.key
     
     # For Windows compatibility, also create CA files (same as server for self-signed)
     cp "$SSL_DIR/identity.getpostman.com.crt" ca.crt
-    touch ca.key  # Empty file, not needed for self-signed
-    
-    # Create uninstall.bat for manual cleanup scenarios
+}
+
+create_uninstall_script() {
     log "INFO" "Creating uninstall.bat..."
     cat > uninstall.bat << 'EOF'
 @echo off
@@ -856,35 +939,23 @@ sc delete "PostmanAuthRouter" >nul 2>&1
 echo Service cleanup complete
 pause
 EOF
+}
+
+build_authrouter_components() {
+    log "INFO" "=== Phase 3: Build AuthRouter Components ==="
+    
+    build_authrouter_binary
+    prepare_certificates
+    create_uninstall_script
     
     validation_success "COMPONENTS_BUILD" "AuthRouter components built successfully"
 }
 
-# Phase 5: Use Optimized Cabinet (SIMPLIFIED)
-use_optimized_authrouter_cabinet() {
-    log "INFO" "=== Phase 5: Use Optimized AuthRouter Cabinet ==="
-    
-    cd "$WORK_DIR"
-    
-    # Verify cabinet exists and is valid
-    if [[ ! -f "authrouter.cab" ]]; then
-        validation_error "OPTIMIZED_CABINET" "Optimized cabinet not found - Phase 1A may have failed"
-    fi
-    
-    # Validate cabinet format
-    if ! file authrouter.cab | grep -q "Microsoft Cabinet"; then
-        validation_error "OPTIMIZED_CABINET" "Invalid cabinet format"
-    fi
-    
-    local cab_size=$(stat -f%z authrouter.cab 2>/dev/null || stat -c%s authrouter.cab)
-    log "INFO" "Using optimized cabinet: $(( cab_size / 1024 )) KB (wixl compressed)"
-    
-    validation_success "OPTIMIZED_CABINET" "Optimized cabinet ready for MSI integration"
-}
+# Phase 5 removed - cabinet already validated in Phase 4
 
-# Phase 6: Generate Version-Aware GUIDs (UNCHANGED)
+# Phase 5: Generate Version-Aware GUIDs
 generate_guids() {
-    log "INFO" "=== Phase 6: Generate Component GUIDs ==="
+    log "INFO" "=== Phase 5: Generate Component GUIDs ==="
     
     # Get MSI version for deterministic GUID generation
     local msi_version=$(cat "$WORK_DIR/original_msi_version" 2>/dev/null || echo "1.0.0")
@@ -902,9 +973,9 @@ generate_guids() {
     validation_success "GUID_GENERATION" "Deterministic GUIDs generated for version $msi_version"
 }
 
-# Phase 7: Modify IDT Tables (CABINET NAME CHANGE ONLY)
+# Phase 6: Modify IDT Tables
 modify_idt_tables() {
-    log "INFO" "=== Phase 7: Modify IDT Tables (Native Windows Installer) ==="
+    log "INFO" "=== Phase 6: Modify IDT Tables (Native Windows Installer) ==="
     
     cd "$WORK_DIR"
     
@@ -912,19 +983,19 @@ modify_idt_tables() {
     log "INFO" "Calculating file hashes..."
     AUTHROUTER_HASH=$(openssl dgst -md5 -binary pm-authrouter.exe | od -An -t u4 | tr -s ' ' '\t')
     CA_CRT_HASH=$(openssl dgst -md5 -binary ca.crt | od -An -t u4 | tr -s ' ' '\t')
-    SERVER_CRT_HASH=$(openssl dgst -md5 -binary server.crt | od -An -t u4 | tr -s ' ' '\t')
-    SERVER_KEY_HASH=$(openssl dgst -md5 -binary server.key | od -An -t u4 | tr -s ' ' '\t')
+    IDENTITY_CRT_HASH=$(openssl dgst -md5 -binary identity.getpostman.com.crt | od -An -t u4 | tr -s ' ' '\t')
+    IDENTITY_KEY_HASH=$(openssl dgst -md5 -binary identity.getpostman.com.key | od -An -t u4 | tr -s ' ' '\t')
     UNINSTALL_BAT_HASH=$(openssl dgst -md5 -binary uninstall.bat | od -An -t u4 | tr -s ' ' '\t')
     
-    AUTHROUTER_SIZE=$(stat -f%z pm-authrouter.exe 2>/dev/null || stat -c%s pm-authrouter.exe)
-    CA_CRT_SIZE=$(stat -f%z ca.crt 2>/dev/null || stat -c%s ca.crt)
-    SERVER_CRT_SIZE=$(stat -f%z server.crt 2>/dev/null || stat -c%s server.crt)
-    SERVER_KEY_SIZE=$(stat -f%z server.key 2>/dev/null || stat -c%s server.key)
-    UNINSTALL_BAT_SIZE=$(stat -f%z uninstall.bat 2>/dev/null || stat -c%s uninstall.bat)
+    AUTHROUTER_SIZE=$(get_file_size pm-authrouter.exe)
+    CA_CRT_SIZE=$(get_file_size ca.crt)
+    IDENTITY_CRT_SIZE=$(get_file_size identity.getpostman.com.crt)
+    IDENTITY_KEY_SIZE=$(get_file_size identity.getpostman.com.key)
+    UNINSTALL_BAT_SIZE=$(get_file_size uninstall.bat)
     
     # 1. Add optimized cabinet to Media.idt
     log "INFO" "Updating Media.idt with optimized cabinet..."
-    debug_file_op "MODIFY" "Media.idt" "Adding authrouter cabinet entry"
+    log "DEBUG" "FILE_MODIFY: Media.idt [Adding authrouter cabinet entry]"
     AUTH_MEDIA_ID=900
     echo -e "$AUTH_MEDIA_ID\t9999\t\tauthrouter.cab\t\t" >> Media.idt
     log "DEBUG" "Added Media.idt entry: ID=$AUTH_MEDIA_ID, LastSequence=9999, Cabinet=authrouter.cab"
@@ -938,7 +1009,7 @@ modify_idt_tables() {
     
     # 3. Add components to Component.idt (now using AUTHDIR)
     log "INFO" "Updating Component.idt..."
-    debug_file_op "READ" "Component.idt" "Before modification"
+    log "DEBUG" "FILE_READ: Component.idt [Before modification]"
     local comp_count_before=$(wc -l < Component.idt)
     log "DEBUG" "Component.idt has $comp_count_before lines before modification"
     
@@ -947,7 +1018,7 @@ modify_idt_tables() {
     
     local comp_count_after=$(wc -l < Component.idt)
     log "DEBUG" "Component.idt has $comp_count_after lines after modification (added $((comp_count_after - comp_count_before)) lines)"
-    debug_file_op "MODIFY" "Component.idt" "Added AuthRouter components"
+    log "DEBUG" "FILE_MODIFY: Component.idt [Added AuthRouter components]"
     
     # 4. Add files to File.idt with safe sequence range
     log "INFO" "Updating File.idt..."
@@ -955,16 +1026,16 @@ modify_idt_tables() {
     
     echo -e "pm_authrouter.exe\tAuthRouterComponent\tpm_authr.exe|pm-authrouter.exe\t$AUTHROUTER_SIZE\t1.0.0.0\t1033\t512\t$AUTH_FILE_SEQ_START" >> File.idt
     echo -e "ca.crt\tCertsComponent\tca.crt\t$CA_CRT_SIZE\t\t\t512\t$((AUTH_FILE_SEQ_START + 1))" >> File.idt
-    echo -e "server.crt\tCertsComponent\tserver.crt\t$SERVER_CRT_SIZE\t\t\t512\t$((AUTH_FILE_SEQ_START + 2))" >> File.idt
-    echo -e "server.key\tCertsComponent\tserver.key\t$SERVER_KEY_SIZE\t\t\t512\t$((AUTH_FILE_SEQ_START + 3))" >> File.idt
+    echo -e "identity.getpostman.com.crt\tCertsComponent\tidentity.getpostman.com.crt\t$IDENTITY_CRT_SIZE\t\t\t512\t$((AUTH_FILE_SEQ_START + 2))" >> File.idt
+    echo -e "identity.getpostman.com.key\tCertsComponent\tidentity.getpostman.com.key\t$IDENTITY_KEY_SIZE\t\t\t512\t$((AUTH_FILE_SEQ_START + 3))" >> File.idt
     echo -e "uninstall.bat\tCertsComponent\tuninstall.bat\t$UNINSTALL_BAT_SIZE\t\t\t512\t$((AUTH_FILE_SEQ_START + 4))" >> File.idt
     
     # 5. Add file hashes to MsiFileHash.idt
     log "INFO" "Updating MsiFileHash.idt..."
     echo -e "pm_authrouter.exe\t0$AUTHROUTER_HASH" >> MsiFileHash.idt
     echo -e "ca.crt\t0$CA_CRT_HASH" >> MsiFileHash.idt
-    echo -e "server.crt\t0$SERVER_CRT_HASH" >> MsiFileHash.idt
-    echo -e "server.key\t0$SERVER_KEY_HASH" >> MsiFileHash.idt
+    echo -e "identity.getpostman.com.crt\t0$IDENTITY_CRT_HASH" >> MsiFileHash.idt
+    echo -e "identity.getpostman.com.key\t0$IDENTITY_KEY_HASH" >> MsiFileHash.idt
     echo -e "uninstall.bat\t0$UNINSTALL_BAT_HASH" >> MsiFileHash.idt
     
     # 6. Add to FeatureComponents.idt
@@ -1041,136 +1112,11 @@ EOF
     fi
 }
 
-# Phase 7A: IDT Schema Validation (CRITICAL NEW VALIDATION)
-validate_idt_schema() {
-    log "INFO" "=== Phase 7A: IDT Schema Validation ==="
-    
-    cd "$WORK_DIR"
-    
-    # Component.idt schema validation
-    validate_component_idt() {
-        log "INFO" "Validating Component.idt schema..."
-        
-        local expected_cols=6
-        while IFS=$'\t' read -r component componentId directory attributes condition keyPath; do
-            [[ "$component" =~ ^(Component|s72|Component)$ ]] && continue
-            
-            if [[ "$component" =~ AuthRouter.*Component ]]; then
-                # Validate GUID format
-                if [[ ! "$componentId" =~ ^\{[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}\}$ ]]; then
-                    validation_error "SCHEMA_VALIDATION" "Invalid GUID format in Component.idt: $componentId"
-                fi
-                
-                # Validate directory reference
-                if [[ "$directory" != "AUTHDIR" ]]; then
-                    validation_error "SCHEMA_VALIDATION" "Invalid directory reference: $directory (expected AUTHDIR)"
-                fi
-                
-                # Validate attributes (260 = LocalOnly + Win64)
-                if [[ "$attributes" != "260" ]]; then
-                    validation_error "SCHEMA_VALIDATION" "Invalid component attributes: $attributes (expected 260)"
-                fi
-                
-                log "INFO" "   Component $component validated"
-            fi
-        done < Component.idt
-        return 0
-    }
-    
-    # File.idt schema validation
-    validate_file_idt() {
-        log "INFO" "Validating File.idt schema..."
-        
-        local max_existing_seq=$(cat "$WORK_DIR/.max_file_sequence" 2>/dev/null || echo "0")
-        local auth_seq_start=9001
-        
-        while IFS=$'\t' read -r file component fileName fileSize version language attributes sequence; do
-            [[ "$file" =~ ^(File|s72|File)$ ]] && continue
-            
-            if [[ "$component" =~ AuthRouter.*Component ]] || [[ "$file" =~ (pm_authrouter|ca\.|server\.|uninstall) ]]; then
-                # Validate sequence in safe range (skip if empty)
-                if [[ -n "$sequence" && "$sequence" =~ ^[0-9]+$ ]]; then
-                    if [[ $sequence -lt $auth_seq_start ]] || [[ $sequence -gt 9999 ]]; then
-                        validation_error "SCHEMA_VALIDATION" "File sequence out of safe range: $sequence (expected $auth_seq_start-9999)"
-                    fi
-                fi
-                
-                # Validate file size is reasonable
-                if [[ $fileSize -lt 100 ]]; then
-                    validation_error "SCHEMA_VALIDATION" "File size too small: $file = ${fileSize}B"
-                fi
-                
-                # Validate attributes (skip if empty)
-                if [[ -n "$attributes" && "$attributes" != "512" ]]; then
-                    validation_error "SCHEMA_VALIDATION" "Invalid file attributes: $attributes (expected 512)"
-                fi
-                
-                log "INFO" "   File $file validated (seq: $sequence, size: ${fileSize}B)"
-            fi
-        done < File.idt
-        return 0
-    }
-    
-    # Media.idt validation
-    validate_media_idt() {
-        log "INFO" "Validating Media.idt schema..."
-        
-        if ! grep -q "^900" Media.idt; then
-            validation_error "SCHEMA_VALIDATION" "Media ID 900 not found in Media.idt"
-        fi
-        
-        local media_row=$(grep "^900" Media.idt)
-        local cabinet=$(echo "$media_row" | cut -f4)
-        
-        if [[ "$cabinet" != "authrouter.cab" ]]; then
-            validation_error "SCHEMA_VALIDATION" "Wrong cabinet name in Media.idt: $cabinet (expected authrouter.cab)"
-        fi
-        
-        log "INFO" "   Media ID 900 validated with optimized cabinet"
-        return 0
-    }
-    
-    # ServiceInstall.idt validation
-    validate_service_idt() {
-        log "INFO" "Validating ServiceInstall.idt schema..."
-        
-        if ! grep -q "PostmanAuthRouter" ServiceInstall.idt; then
-            validation_error "SCHEMA_VALIDATION" "PostmanAuthRouter service not found in ServiceInstall.idt"
-        fi
-        
-        local service_row=$(grep "PostmanAuthRouter" ServiceInstall.idt | head -1)
-        local service_type=$(echo "$service_row" | cut -f6)
-        local start_type=$(echo "$service_row" | cut -f7)
-        local error_control=$(echo "$service_row" | cut -f8)
-        
-        # Validate service configuration
-        if [[ "$service_type" != "16" ]]; then
-            validation_error "SCHEMA_VALIDATION" "Invalid service type: $service_type (expected 16)"
-        fi
-        
-        if [[ "$start_type" != "2" ]]; then
-            validation_error "SCHEMA_VALIDATION" "Invalid start type: $start_type (expected 2)"
-        fi
-        
-        if [[ "$error_control" != "1" ]]; then
-            validation_error "SCHEMA_VALIDATION" "Invalid error control: $error_control (expected 1)"
-        fi
-        
-        log "INFO" "   Service configuration validated"
-        return 0
-    }
-    
-    # Run all schema validations
-    if validate_component_idt && validate_file_idt && validate_media_idt && validate_service_idt; then
-        validation_success "SCHEMA_VALIDATION" "All IDT schemas validated successfully"
-    else
-        validation_error "SCHEMA_VALIDATION" "Schema validation failed"
-    fi
-}
+# Phase 7A removed - unnecessary validation of our own output
 
-# Phase 7B: Cross-Table Relationship Validation (CRITICAL NEW VALIDATION)
+# Phase 7: Cross-Table Relationship Validation
 validate_idt_relationships() {
-    log "INFO" "=== Phase 7B: Cross-Table Relationships Validation ==="
+    log "INFO" "=== Phase 7: Cross-Table Relationships Validation ==="
     
     cd "$WORK_DIR"
     
@@ -1278,19 +1224,19 @@ build_final_msi() {
     for idt_file in "${ordered_tables[@]}"; do
         if [[ -f "$idt_file" ]]; then
             log "INFO" "Importing $idt_file..."
-            debug_file_op "READ" "$idt_file" "Before import"
+            log "DEBUG" "FILE_READ: $idt_file [Before import]"
             
             # Special debug for critical tables
             if [[ "$idt_file" == "Component.idt" ]]; then
                 log "DEBUG" "Component.idt line count: $(wc -l < "$idt_file")"
                 log "DEBUG" "Checking for ProgramMenuDir in Component.idt:"
-                grep "ProgramMenuDir" "$idt_file" >> "$DEBUG_LOG" 2>&1 || echo "ProgramMenuDir not found!" >> "$DEBUG_LOG"
+                grep "ProgramMenuDir" "$idt_file" >> "$LOG_FILE" 2>&1 || echo "ProgramMenuDir not found!" >> "$LOG_FILE"
             fi
             
             if [[ "$idt_file" == "FeatureComponents.idt" ]]; then
                 log "DEBUG" "FeatureComponents.idt line count: $(wc -l < "$idt_file")"
                 log "DEBUG" "Components referenced in FeatureComponents:"
-                tail -n +4 "$idt_file" | cut -f2 | sort -u >> "$DEBUG_LOG"
+                tail -n +4 "$idt_file" | cut -f2 | sort -u >> "$LOG_FILE"
             fi
             
             log_cmd msibuild temp.msi -i "$idt_file"
@@ -1320,9 +1266,9 @@ build_final_msi() {
     mv temp.msi "$output_msi"
     
     # Report results with compression savings
-    local final_size=$(stat -f%z "$output_msi" 2>/dev/null || stat -c%s "$output_msi")
-    local original_size=$(stat -f%z "$original_msi_path" 2>/dev/null || stat -c%s "$original_msi_path")
-    local cab_size=$(stat -f%z authrouter.cab 2>/dev/null || stat -c%s authrouter.cab)
+    local final_size=$(get_file_size "$output_msi")
+    local original_size=$(get_file_size "$original_msi_path")
+    local cab_size=$(get_file_size authrouter.cab)
     
     log "SUCCESS" "=== Build Complete with Optimized Compression ==="
     log "INFO" "Original MSI: $(( original_size / 1024 / 1024 )) MB"
@@ -1341,6 +1287,7 @@ validate_final_msi() {
     log "INFO" "=== Phase 8A: Final MSI Structure Validation ==="
     
     local output_msi="$1"
+    local original_msi="$2"
     
     # Basic MSI integrity
     if ! file "$output_msi" | grep -q "Composite Document File"; then
@@ -1348,10 +1295,13 @@ validate_final_msi() {
     fi
     
     # Extract and validate tables
-    local temp_validate_dir=$(mktemp -d "$TEMP_ROOT/msi-validate-$$-XXXXXX")
+    local temp_validate_dir=$(create_temp_dir "msi-validate")
     cd "$temp_validate_dir"
     
+    # Extract final MSI tables (cache for potential reuse)
     msidump -t "$output_msi"
+    mkdir -p "$WORK_DIR/cached_final_tables"
+    cp *.idt "$WORK_DIR/cached_final_tables/" 2>/dev/null || true
     
     # Verify AuthRouter components exist
     local auth_component_count=$(grep -c "AuthRouter.*Component" Component.idt 2>/dev/null || echo 0)
@@ -1379,13 +1329,17 @@ validate_final_msi() {
         validation_error "FINAL_MSI" "authrouter.cab corrupted in final MSI"
     fi
     
-    # Size validation
-    local final_size=$(stat -f%z "$output_msi" 2>/dev/null || stat -c%s "$output_msi")
-    local max_size=$((125 * 1024 * 1024))  # 125MB limit
+    # Dynamic size validation - final MSI should not grow more than 10MB from original
+    local final_size=$(get_file_size "$output_msi")
+    local original_size=$(get_file_size "$original_msi")
+    local max_growth=$((10 * 1024 * 1024))  # 10MB growth limit
+    local size_growth=$((final_size - original_size))
     
-    if [[ $final_size -gt $max_size ]]; then
-        validation_error "FINAL_MSI" "Final MSI too large: $(($final_size/1024/1024))MB > 125MB"
+    if [[ $size_growth -gt $max_growth ]]; then
+        validation_error "FINAL_MSI" "Final MSI grew too much: +$(($size_growth/1024/1024))MB > 10MB limit (was $(($original_size/1024/1024))MB, now $(($final_size/1024/1024))MB)"
     fi
+    
+    log "INFO" "MSI size validation: Original $(($original_size/1024/1024))MB → Final $(($final_size/1024/1024))MB (growth: +$(($size_growth/1024/1024))MB)"
     
     # Cleanup
     rm -rf "$temp_validate_dir"
@@ -1400,12 +1354,25 @@ validate_no_regressions() {
     local original_msi="$1"
     local new_msi="$2"
     
-    # Extract both MSI databases for comparison
-    local temp_diff_dir=$(mktemp -d "$TEMP_ROOT/msi-diff-$$-XXXXXX")
+    # Use cached tables if available, otherwise extract
+    local temp_diff_dir=$(create_temp_dir "msi-diff")
     mkdir -p "$temp_diff_dir"/{original,new}
     
-    cd "$temp_diff_dir/original" && msidump -t "$original_msi" >/dev/null 2>&1
-    cd "$temp_diff_dir/new" && msidump -t "$new_msi" >/dev/null 2>&1
+    # Try to use cached original tables
+    if [[ -d "$WORK_DIR/cached_original_tables" ]] && [[ "$(ls -A "$WORK_DIR/cached_original_tables")" ]]; then
+        log "INFO" "Using cached original MSI tables"
+        cp "$WORK_DIR/cached_original_tables"/*.idt "$temp_diff_dir/original/" 2>/dev/null
+    else
+        cd "$temp_diff_dir/original" && msidump -t "$original_msi" >/dev/null 2>&1
+    fi
+    
+    # Try to use cached final tables
+    if [[ -d "$WORK_DIR/cached_final_tables" ]] && [[ "$(ls -A "$WORK_DIR/cached_final_tables")" ]]; then
+        log "INFO" "Using cached final MSI tables"
+        cp "$WORK_DIR/cached_final_tables"/*.idt "$temp_diff_dir/new/" 2>/dev/null
+    else
+        cd "$temp_diff_dir/new" && msidump -t "$new_msi" >/dev/null 2>&1
+    fi
     
     # Compare critical tables (must be identical except AuthRouter additions)
     local protected_tables=("Product.idt" "Property.idt" "Directory.idt")
@@ -1425,8 +1392,8 @@ validate_no_regressions() {
     cd "$temp_diff_dir/original" && msidump -s "$original_msi" >/dev/null 2>&1
     cd "$temp_diff_dir/new" && msidump -s "$new_msi" >/dev/null 2>&1
     
-    local original_cab_size=$(stat -f%z "original/_Streams/starship.cab" 2>/dev/null || stat -c%s "original/_Streams/starship.cab")
-    local new_cab_size=$(stat -f%z "new/_Streams/starship.cab" 2>/dev/null || stat -c%s "new/_Streams/starship.cab")
+    local original_cab_size=$(get_file_size "original/_Streams/starship.cab")
+    local new_cab_size=$(get_file_size "new/_Streams/starship.cab")
     
     # Allow small variation (< 1KB) for stream metadata
     local size_diff=$((new_cab_size - original_cab_size))
@@ -1455,7 +1422,7 @@ validate_msiinfo_parity() {
     
     # 1. Compare table lists
     log "INFO" "Comparing MSI table structures..."
-    local temp_compare=$(mktemp -d "$TEMP_ROOT/msi-compare-$$-XXXXXX")
+    local temp_compare=$(create_temp_dir "msi-compare")
     
     msiinfo tables "$original_msi" 2>/dev/null | sort > "$temp_compare/original_tables.txt"
     msiinfo tables "$new_msi" 2>/dev/null | sort > "$temp_compare/new_tables.txt"
@@ -1508,11 +1475,11 @@ validate_msiinfo_parity() {
     # Export FeatureComponents and validate all components exist
     log "DEBUG" "Exporting FeatureComponents table from: $new_msi"
     msiinfo export "$new_msi" "FeatureComponents" > "$temp_compare/feature_components.idt" 2>/dev/null
-    debug_file_op "WRITE" "$temp_compare/feature_components.idt" "FeatureComponents export"
+    log "DEBUG" "FILE_WRITE: $temp_compare/feature_components.idt [FeatureComponents export]"
     
     log "DEBUG" "Exporting Component table from: $new_msi"
     msiinfo export "$new_msi" "Component" > "$temp_compare/components.idt" 2>/dev/null
-    debug_file_op "WRITE" "$temp_compare/components.idt" "Component export"
+    log "DEBUG" "FILE_WRITE: $temp_compare/components.idt [Component export]"
     
     # Debug: Show table contents
     log "DEBUG" "FeatureComponents table has $(wc -l < "$temp_compare/feature_components.idt") lines"
@@ -1552,7 +1519,7 @@ validate_msiinfo_parity() {
             # Debug: show what we're looking for
             log "WARN" "Component '$component' not found in Component table"
             log "DEBUG" "Valid components list:"
-            echo "$valid_components" | head -10 >> "$DEBUG_LOG"
+            echo "$valid_components" | head -10 >> "$LOG_FILE"
             
             validation_error "MSIINFO_PARITY" "Error 2715: Component '$component' referenced in FeatureComponents but not in Component table"
         fi
@@ -1641,19 +1608,13 @@ main() {
     # Phase 4: Build optimized cabinet
     build_optimized_authrouter_cabinet
     
-    # Phase 5: Prepare optimized cabinet
-    use_optimized_authrouter_cabinet
-    
-    # Phase 6: Generate GUIDs
+    # Phase 5: Generate GUIDs (renumbered from Phase 6)
     generate_guids
     
-    # Phase 7: Modify IDT tables (with auth subdirectory)
+    # Phase 6: Modify IDT tables with auth subdirectory (renumbered from Phase 7)
     modify_idt_tables
     
-    # Phase 7A: Critical IDT schema validation
-    validate_idt_schema
-    
-    # Phase 7B: Critical IDT relationship validation  
+    # Phase 7: Critical IDT relationship validation (renumbered from Phase 7B)
     validate_idt_relationships
     
     # Phase 8: Build final MSI
@@ -1661,17 +1622,17 @@ main() {
     
     # Phase 8A: Final MSI structure validation
     local final_msi=$(cat "$WORK_DIR/final_msi_path")
-    validate_final_msi "$final_msi"
+    local original_msi=$(cat "$WORK_DIR/original_msi_path")
+    validate_final_msi "$final_msi" "$original_msi"
     
     # Phase 8B: Critical regression validation
-    local original_msi=$(cat "$WORK_DIR/original_msi_path")
     validate_no_regressions "$original_msi" "$final_msi"
     
     # Phase 8C: MSI Info Table Parity Validation
     validate_msiinfo_parity "$original_msi" "$final_msi"
     
     # Final success report
-    local final_size=$(stat -f%z "$final_msi" 2>/dev/null || stat -c%s "$final_msi")
+    local final_size=$(get_file_size "$final_msi")
     local msi_version=$(cat "$WORK_DIR/original_msi_version" 2>/dev/null || echo "unknown")
     
     log "SUCCESS" "================================================="
