@@ -2,6 +2,11 @@
 
 Enterprise authentication (SAML) enforcement for Postman Desktop Enterprise.
 
+**Fully Tested & Validated as of August 2025:**
+- **macOS**: Installation and configuration validated via JAMF on macOS 15.6 Sequoia
+- **Windows**: Installation and configuration validated via Microsoft Intune MDM on Windows 10 22H2 and Windows 11 24H2
+- **Build Environment**: Tested on macOS 15.5 Ventura for both Windows and macOS deployments, Windows 10/11 for Windows deployment.
+
 ## Project Structure
 
 ```
