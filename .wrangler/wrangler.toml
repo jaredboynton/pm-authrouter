@@ -1,3 +1,0 @@
-name = "dl-proxy"
-main = "worker.js"
-compatibility_date = "2025-08-29"
