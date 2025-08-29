@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -19,6 +20,15 @@ import (
 )
 
 func main() {
+	// Install panic handler FIRST to ensure DNS cleanup on crash
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC: %v", r)
+			emergencyDNSCleanup()
+			os.Exit(1)
+		}
+	}()
+	
 	// Define command line flags - these are accessed by the config package
 	_ = flag.String("team", "", "Postman team name")
 	_ = flag.String("saml-url", "", "SAML initialization URL")
@@ -241,7 +251,7 @@ func main() {
 
 	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 
 	// Register cleanup handlers
 	defer func() {
@@ -277,4 +287,32 @@ func main() {
 	wg.Wait()
 
 	log.Println("AuthRouter stopped")
+}
+
+// emergencyDNSCleanup performs direct hosts file cleanup without dependencies
+func emergencyDNSCleanup() {
+	// Simple, direct cleanup - no dependencies
+	hostsPath := "/etc/hosts"
+	content, err := os.ReadFile(hostsPath)
+	if err != nil {
+		// Can't read hosts file, nothing to clean
+		return
+	}
+	
+	lines := strings.Split(string(content), "\n")
+	var cleaned []string
+	for _, line := range lines {
+		// Remove any PostmanAuthRouter or identity.getpostman.com entries
+		if !strings.Contains(line, "PostmanAuthRouter") &&
+		   !strings.Contains(line, "identity.getpostman.com") {
+			cleaned = append(cleaned, line)
+		}
+	}
+	
+	// Try to write atomically via temp file to avoid corruption
+	tempPath := hostsPath + ".tmp"
+	if err := os.WriteFile(tempPath, []byte(strings.Join(cleaned, "\n")), 0644); err == nil {
+		// Only rename if write succeeded
+		os.Rename(tempPath, hostsPath)
+	}
 }

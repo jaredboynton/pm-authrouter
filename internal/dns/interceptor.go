@@ -80,8 +80,11 @@ func (i *Interceptor) Start() error {
 
 	log.Printf("Starting DNS interceptor for %s -> %s", i.config.TargetDomain, i.config.RedirectIP)
 
+	// Select method based on VPN status
+	methods := i.selectMethodsForEnvironment()
+
 	var lastErr error
-	for _, method := range i.methods {
+	for _, method := range methods {
 		log.Printf("Attempting DNS interception method: %s", i.methodName(method))
 		
 		if err := i.startMethod(method); err != nil {
@@ -308,6 +311,12 @@ func (i *Interceptor) tryAlternativeMethods() {
 	}
 
 	log.Printf("All fallback methods failed - DNS interception may be non-functional")
+}
+
+// selectMethodsForEnvironment selects appropriate DNS methods based on environment
+func (i *Interceptor) selectMethodsForEnvironment() []InterceptionMethod {
+	// Just use the configured methods - hosts file works fine with VPNs
+	return i.methods
 }
 
 // Platform-specific methods are implemented in platform-specific files with build tags

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +35,15 @@ type authrouter struct {
 
 // Execute implements the Windows service interface
 func (m *authrouter) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
+	// Install panic handler FIRST
+	defer func() {
+		if r := recover(); r != nil {
+			m.elog.Error(1, fmt.Sprintf("Service panic: %v", r))
+			emergencyDNSCleanup()  // ALWAYS clean DNS on panic
+			logEventToWindows("ERROR", "Service crashed - DNS cleaned up automatically")
+		}
+	}()
+	
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
 	changes <- svc.Status{State: svc.StartPending}
 
@@ -207,6 +218,8 @@ func runDaemon(ctx context.Context, elog debug.Log) error {
 		defer wg.Done()
 		monitorDNSInterception(ctx, systemMgr)
 	}()
+
+
 
 	// Register cleanup
 	defer func() {
@@ -404,4 +417,40 @@ func stopService() error {
 
 	fmt.Printf("Service %s stopped successfully\n", serviceName)
 	return nil
+}
+
+// emergencyDNSCleanup performs direct hosts file cleanup without dependencies
+func emergencyDNSCleanup() {
+	// Simple, direct cleanup - no dependencies
+	hostsPath := `C:\Windows\System32\drivers\etc\hosts`
+	content, err := os.ReadFile(hostsPath)
+	if err != nil {
+		// Can't read hosts file, nothing to clean
+		return
+	}
+	
+	lines := strings.Split(string(content), "\n")
+	var cleaned []string
+	for _, line := range lines {
+		// Remove any PostmanAuthRouter or identity.getpostman.com entries
+		if !strings.Contains(line, "PostmanAuthRouter") &&
+		   !strings.Contains(line, "identity.getpostman.com") {
+			cleaned = append(cleaned, line)
+		}
+	}
+	
+	// Write back cleaned hosts file
+	os.WriteFile(hostsPath, []byte(strings.Join(cleaned, "\n")), 0644)
+}
+
+// logEventToWindows logs to Windows Event Log
+func logEventToWindows(eventType string, message string) {
+	// Log to Windows Event Log so IT can see crashes
+	cmd := exec.Command("eventcreate",
+		"/T", eventType,
+		"/ID", "1001",
+		"/L", "APPLICATION",
+		"/SO", "PostmanAuthRouter",
+		"/D", message)
+	cmd.Run()
 }
