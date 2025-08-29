@@ -111,7 +111,7 @@ Simple DNS redirection or basic HTTP redirects won't work for SAML enforcement b
 
 The helper operates as an intelligent SSL proxy with multi-layered DNS interception:
 
-1. **Multi-Method DNS Interception**: Uses fallback strategies including hosts file, Windows Filtering Platform, macOS Network Extensions, and registry overrides
+1. **Multi-Method DNS Interception**: Uses fallback strategies including hosts, packet filetering, WFP, Network Extensions, registry configuration
 2. **Selective Interception**: Only intercepts authentication endpoints (`/login`, `/enterprise/login`, `/enterprise/login/authchooser`)
 3. **Parameter Preservation**: Extracts and forwards authentication parameters to your SAML provider
 4. **Transparent Proxying**: All other requests pass through to real Postman servers with proper SSL/SNI handling and CDN compatibility
