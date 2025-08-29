@@ -190,4 +190,4 @@ For local development and testing:
 
 ## Note for Postman
 
-This solution is CI/CD-ready. Postman can drag and drop and enable secure collaboration for tens of thousands more highly-secure Postman Enterprise users overnight - zero product modification necessary - just stick it in the build pipeline, and whenever a new version is pushed, the build scripts automatically enhance any Postman Enterprise installer with mandatory SSO enforcement, making it enterprise-compliant out of the box.
+This solution is CI/CD-ready. Postman can drag and drop and enable secure collaboration for tens of thousands more highly-secure Postman Enterprise users overnight - zero product modification necessary - just stick it in the build pipeline, and whenever a new version is pushed the build scripts automatically enhance any Postman Enterprise installer with mandatory SSO enforcement, configurable at install-time. Easy peasy.
