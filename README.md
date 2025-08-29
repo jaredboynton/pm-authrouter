@@ -1,3 +1,5 @@
+![Postman Enterprise Authentication Router](pmar-banner.jpeg)
+
 # Postman AuthRouter (Go)
 
 Enterprise authentication (SAML) enforcement for Postman Desktop Enterprise.
