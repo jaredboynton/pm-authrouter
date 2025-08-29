@@ -5,9 +5,9 @@ This directory contains everything needed to deploy Postman Enterprise with SAML
 ## Quick Start
 
 ### 1. Get Original Postman Installer
-Download the official Postman Enterprise installer for your platform and place it in the appropriate directory:
-- **macOS**: Place `.pkg` files in `deployment/macos/`
-- **Windows**: Place `.msi` files in `deployment/windows/`
+The build scripts can automatically download the latest Postman Enterprise installers, or you can provide your own:
+- **macOS**: Auto-downloads via Cloudflare proxy, or place `.pkg` files in `deployment/macos/`
+- **Windows**: Auto-downloads via Cloudflare proxy, or place `.msi` files in `deployment/windows/`
 
 ### 2. Generate SSL Certificates (One-Time Setup)
 The build process needs stable SSL certificates for HTTPS interception. These are generated automatically on first build:
@@ -25,6 +25,8 @@ cd ssl/
 
 ### 3. Build Your Package
 
+**Note for macOS**: The build script automatically signs PKGs if Apple Developer ID certificates are available in your keychain. Unsigned packages may require additional MDM configuration for deployment.
+
 Choose your configuration approach:
 
 #### Option A: Configure at Build Time (Optional)
@@ -34,9 +36,12 @@ Build with your team's settings embedded for immediate deployment:
 cd deployment/macos
 ./build_pkg_mdm.sh --team "your-team" --saml-url "https://identity.getpostman.com/sso/.../init"
 
-# Windows
+# Windows (PowerShell)
 cd deployment/windows
 ./build_msi_mdm_win.ps1 -TeamName "your-team" -SamlUrl "https://identity.getpostman.com/sso/.../init"
+
+# Windows (from macOS/Linux)
+./build_msi_mdm_unix.sh --team "your-team" --saml-url "https://identity.getpostman.com/sso/.../init"
 ```
 
 #### Option B: Configure at Install Time (Recommended)
@@ -44,10 +49,11 @@ Build generic package, configure during deployment:
 ```bash
 # Build without configuration - services always installed but inactive until configured
 ./build_pkg_mdm.sh        # macOS
-./build_msi_mdm_win.ps1   # Windows
+./build_msi_mdm_win.ps1   # Windows (PowerShell)
+./build_msi_mdm_unix.sh   # Windows (from macOS/Linux)
 
 # Deploy with configuration
-# macOS: Use Jamf parameters or Configuration Profile
+# macOS: Use MDM Configuration Profile (see platform README for format)
 # Windows: msiexec /i package.msi TEAM_NAME="team" SAML_URL="url" /quiet
 ```
 
@@ -61,11 +67,11 @@ Use your preferred method:
 
 The AuthRouter intercepts HTTPS traffic, requiring certificate trust on client machines.
 
-#### macOS - MDM Profile Deployment
-The build process generates a `.mobileconfig` file that MUST be deployed via MDM:
+#### macOS - MDM Profile Deployment (REQUIRED)
+The build process generates a `.mobileconfig` file that **MUST** be deployed via MDM for certificate trust:
 
 1. **File Generated**: `Postman-Enterprise-VERSION-enterprise01-auth.mobileconfig`
-2. **Deploy Via MDM**:
+2. **Deploy Via MDM** (manual trust not possible on macOS 11+):
    - **Jamf Pro**: Configuration Profiles → Upload → Scope to target computers
    - **Microsoft Intune**: Devices → Configuration profiles → Create profile → macOS → Templates → Custom
    - **VMware Workspace ONE**: Devices → Profiles & Resources → Profiles → Add → macOS → Custom Settings
@@ -74,6 +80,8 @@ The build process generates a `.mobileconfig` file that MUST be deployed via MDM
    ```bash
    security find-certificate -c "identity.getpostman.com" /Library/Keychains/System.keychain
    ```
+
+**Important**: macOS 11+ requires MDM deployment for certificate trust. Manual installation via Keychain Access is no longer sufficient for system-level trust.
 
 #### Windows - Automatic Trust
 - **MSI Installation**: Certificate is automatically installed to Trusted Root during MSI installation
@@ -114,12 +122,13 @@ Embed settings when building the package:
 
 ### Runtime Configuration (Recommended)
 Configure during or after installation:
-- **macOS**: Jamf script parameters, Configuration Profiles, or MDM managed preferences
-- **Windows**: MSI properties or registry values
+- **macOS**: MDM Configuration Profiles with managed preferences (Forced array format for Jamf)
+- **Windows**: MSI properties, registry values, or Group Policy
 - Best for multi-team environments, testing, or centralized management
 - Services always installed but remain inactive until configured
 
-See platform-specific READMEs for detailed configuration methods.
+**Note**: The macOS configuration profile requires specific formatting for Jamf compatibility.
+See platform-specific READMEs for the exact XML template and configuration methods.
 
 ## Uninstallation
 
@@ -127,7 +136,11 @@ Both platforms include complete uninstall scripts:
 
 **macOS:**
 ```bash
+# Remove AuthRouter only (preserves Postman app)
 sudo /usr/local/bin/postman/uninstall.sh
+
+# Complete removal (includes Postman app)
+sudo /usr/local/bin/postman/uninstall.sh --all
 ```
 
 **Windows:**
@@ -136,7 +149,9 @@ msiexec /x package.msi /quiet
 # or manually: "C:\Program Files\Postman\Postman Enterprise\uninstall.bat"
 ```
 
-Removes: service/daemon, certificates, hosts file entries, logs (but preserves Postman app on macOS).
+Removes: service/daemon, certificates, hosts file entries, logs. 
+- macOS: Default preserves Postman app, use `--all` for complete removal
+- Windows: Complete removal including Postman app
 
 ## Platform Details
 

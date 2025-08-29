@@ -32,8 +32,8 @@ func Load() (*Config, error) {
 	// Default configuration - use absolute paths for service compatibility
 	certDir := ""
 	if runtime.GOOS == "windows" {
-		// Windows: Store certs alongside service binary in Program Files
-		certDir = filepath.Join(os.Getenv("PROGRAMFILES"), "Postman", "Postman Enterprise")
+		// Windows: Store certs in auth subdirectory alongside service binary
+		certDir = filepath.Join(os.Getenv("PROGRAMFILES"), "Postman", "Postman Enterprise", "auth")
 	} else if runtime.GOOS == "darwin" {
 		// macOS: Store certs alongside daemon binary
 		certDir = "/usr/local/bin/postman"
