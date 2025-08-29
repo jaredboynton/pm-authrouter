@@ -15,10 +15,10 @@ Enterprise authentication (SAML) enforcement for Postman Desktop Enterprise.
 - **[macOS Enterprise Deployment](deployment/macos/README.md)** - PKG packages with MDM certificate profiles
 - **[Windows Enterprise Deployment](deployment/windows/README.md)** - MSI packages with automated certificate trust
 
-**How It Works:**
+##How It Works
 The build scripts work with **any version** of Postman Enterprise:
 - Place your organization's Postman Enterprise .pkg (macOS) or .msi (Windows) in the deployment folder
-- The build scripts automatically enhance them with organization-bound SAML enforcement capabilities
+- The build scripts automatically enhance them with organization-bound SAML enforcement capabilities, bundling the ~5mb helper with the package
 - Configurable via deployment-time configuration via MDM/GPO
 - Automatic certificate trust management, complete uninstall support, enterprise logging and monitoring
 - No user interaction required
