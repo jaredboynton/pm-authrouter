@@ -59,7 +59,7 @@ postman_saml_enforcer_go/
 
 "How do we force our users to log in with our company SSO instead of personal accounts?"
 
-The request comes up constantly. Teams want to ensure that:
+Teams want to ensure that:
 - Employees use corporate-managed accounts, not personal Gmail/Yahoo accounts
 - All API usage is properly audited and tied to company identity
 - Sensitive collections and environments stay within corporate boundaries
@@ -71,8 +71,11 @@ Traditional approaches like blocking Postman entirely create terrible user exper
 
 1. Configure SSO in Postman Enterprise
 2. Enforce Device Trust for your SAML flow to ensure *only* company devices can access your Enterprise team.
-3. Deploy this via MDM to all company devices, ensuring that company devices can *only* access *your* Postman Enterprise team.
-
+3. Deploy this via MDM to all company devices, ensuring that company devices can *only* access *your* Postman Enterprise team:
+```
+#Deploy with:
+--team "yourteam' --samlurl "https://identity.getpostman.com/sso/*******/init"
+```
 ### *Done!*
 
 This helper provides seamless SAML enforcement by intelligently intercepting Postman's authentication flow. Instead of blocking access, it transparently redirects users to your enterprise SSO provider, eliminating the team selection screen and authentication method choices entirely.
