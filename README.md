@@ -84,11 +84,11 @@ This helper provides seamless SAML enforcement by intelligently intercepting Pos
 
 Simple DNS redirection or basic HTTP redirects won't work for SAML enforcement because:
 
-- **Parameter Transformation**: Authentication requests contain critical parameters (`auth_challenge`, `continue`, `team`) that must be preserved and transformed for proper SAML flow
-- **Selective Interception**: Only specific authentication paths need redirection - everything else must proxy normally to maintain Postman functionality
-- **SSL Termination**: Browsers expect valid SSL certificates for `identity.getpostman.com` - the helper generates and trusts certificates automatically
-- **CDN Compatibility**: Real Postman servers use CDN infrastructure requiring proper SNI headers that simple redirects can't provide
-- **Environment Resilience**: Enterprise environments often have DNS proxies, virtualization, and network security tools that block simple DNS methods, requiring advanced fallback techniques
+- Authentication requests contain critical parameters (`auth_challenge`, `continue`, `team`) that must be preserved and transformed for proper SAML flow
+- Only specific authentication paths need redirection - everything else must proxy normally to maintain Postman functionality
+- Browsers expect valid SSL certificates for `identity.getpostman.com` - the helper generates and trusts certificates automatically
+- Real Postman servers use CDN infrastructure requiring proper SNI headers that simple redirects can't provide
+- Enterprise environments have DNS proxies, virtualization, and network security tools that limit simple DNS methods, requiring advanced fallback techniques
 
 **Why This is the Best Possible Solution:**
 
