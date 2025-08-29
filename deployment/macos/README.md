@@ -11,9 +11,9 @@ Most common deployment:
 ./build_pkg_mdm.sh
 
 # 2. Deploy via your MDM:
-#    - Certificate trust profile: Postman-Enterprise-VERSION-enterprise01-auth.mobileconfig
-#    - SAML config profile: Create managed preferences (see below)
-#    - Software package: Postman-Enterprise-VERSION-ARCH-saml.pkg
+#    - Certificate trust profile: Postman-Enterprise-VERSION-enterprise01-auth.mobileconfig (generated)
+#    - Your SAML config profile: Create managed preferences (see below)
+#    - Software package: Postman-Enterprise-VERSION-ARCH-saml.pkg (generated)
 ```
 
 ## Build Options
@@ -58,26 +58,40 @@ Create MDM configuration profile with managed preferences:
     <key>PayloadContent</key>
     <array>
         <dict>
-            <key>PayloadDisplayName</key>
-            <string>Postman AuthRouter Configuration</string>
-            <key>PayloadIdentifier</key>
-            <string>com.postman.pm-authrouter</string>
             <key>PayloadType</key>
             <string>com.apple.ManagedClient.preferences</string>
-            <key>PayloadUUID</key>
-            <string>YOUR-UUID-HERE</string>
             <key>PayloadVersion</key>
             <integer>1</integer>
+            <key>PayloadIdentifier</key>
+            <string>com.postman.pm-authrouter.preferences</string>
+            <key>PayloadUUID</key>
+            <string>YOUR-UUID-HERE</string>
             <key>PayloadEnabled</key>
             <true/>
+            <key>PayloadDisplayName</key>
+            <string>Postman AuthRouter Configuration</string>
+            <key>PayloadDescription</key>
+            <string>Configures SAML settings for Postman Enterprise AuthRouter</string>
             <key>PayloadOrganization</key>
-            <string>Your Organization</string>
-            <key>PayloadScope</key>
-            <string>System</string>
-            <key>teamName</key>
-            <string>YOURTEAM</string>
-            <key>samlUrl</key>
-            <string>https://identity.getpostman.com/*****/init</string>
+            <string>YOUR-ORGANIZATION</string>
+            <key>PayloadContent</key>
+            <dict>
+                <key>com.postman.pm-authrouter</key>
+                <dict>
+                    <key>Forced</key>
+                    <array>
+                        <dict>
+                            <key>mcx_preference_settings</key>
+                            <dict>
+                                <key>teamName</key>
+                                <string>YOURTEAM</string>
+                                <key>samlUrl</key>
+                                <string>https://identity.getpostman.com/*****/init</string>
+                            </dict>
+                        </dict>
+                    </array>
+                </dict>
+            </dict>
         </dict>
     </array>
     <key>PayloadDisplayName</key>
@@ -85,7 +99,7 @@ Create MDM configuration profile with managed preferences:
     <key>PayloadIdentifier</key>
     <string>com.postman.pm-authrouter.config</string>
     <key>PayloadOrganization</key>
-    <string>Your Organization</string>
+    <string>YOUR-ORGANIZATION</string>
     <key>PayloadRemovalDisallowed</key>
     <false/>
     <key>PayloadScope</key>
@@ -105,11 +119,11 @@ Create MDM configuration profile with managed preferences:
    ```bash
    uuidgen  # Run twice, use different UUID for each PayloadUUID
    ```
-2. **Organization**: Replace `Your Organization` (appears twice) with your company name
-3. **Team Name**: Replace the teamName value with your Postman team name
+2. **Organization**: Replace `YOUR-ORGANIZATION` (appears twice) with your company name
+3. **Team Name**: Replace `YOURTEAM` in teamName value with your Postman team name
    - From your Postman URL: if `YOURTEAM.postman.co`, use `YOURTEAM`
 4. **SAML URL**: Replace the samlUrl value with your SAML SSO init URL
-   - Must end with `/init` (example: `https://identity.getpostman.com/sso/okta/abc123/init`)
+   - Must end with `/init` (example: `https://identity.getpostman.com/*****/init`)
 
 **Option B: Build-time Config**
 Use `--team` and `--saml-url` flags when building (embedded in PKG).

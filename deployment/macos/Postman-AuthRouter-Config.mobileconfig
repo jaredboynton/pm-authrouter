@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.ManagedClient.preferences</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadIdentifier</key>
+            <string>com.postman.pm-authrouter.preferences</string>
+            <key>PayloadUUID</key>
+            <string>F7C3A9B2-8D4E-4A6F-9C1B-3E5D7A2F8B6C</string>
+            <key>PayloadEnabled</key>
+            <true/>
+            <key>PayloadDisplayName</key>
+            <string>Postman AuthRouter Configuration</string>
+            <key>PayloadDescription</key>
+            <string>Configures SAML settings for Postman Enterprise AuthRouter</string>
+            <key>PayloadOrganization</key>
+            <string>Postman</string>
+            <key>PayloadContent</key>
+            <dict>
+                <key>com.postman.pm-authrouter</key>
+                <dict>
+                    <key>Forced</key>
+                    <array>
+                        <dict>
+                            <key>mcx_preference_settings</key>
+                            <dict>
+                                <key>teamName</key>
+                                <string>postman</string>
+                                <key>samlUrl</key>
+                                <string>https://identity.getpostman.com/sso/okta/db1b1a3764f24213906d682e26fd366f/init</string>
+                            </dict>
+                        </dict>
+                    </array>
+                </dict>
+            </dict>
+        </dict>
+    </array>
+    <key>PayloadDisplayName</key>
+    <string>Postman AuthRouter Settings</string>
+    <key>PayloadIdentifier</key>
+    <string>com.postman.pm-authrouter.config</string>
+    <key>PayloadOrganization</key>
+    <string>Postman</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>A5B8C3F2-7D6E-4B9A-8F3C-2E1D9A7F5B4C</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>

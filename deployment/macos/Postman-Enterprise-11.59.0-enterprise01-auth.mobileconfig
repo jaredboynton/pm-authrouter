@@ -17,11 +17,11 @@ MIIDojCCAoqgAwIBAgIUWxP2QYR/93UbOTzQdBiMaxKwzA0wDQYJKoZIhvcNAQELBQAwUzELMAkGA1UE
             <key>PayloadDisplayName</key>
             <string>Postman AuthRouter Certificate</string>
             <key>PayloadIdentifier</key>
-            <string>com.postman.authrouter.certificate.10AF31DB-F7E2-48DA-AFC1-8F5EEA7F3917</string>
+            <string>com.postman.authrouter.certificate.4CA083DD-7C20-4639-B2AE-69CED34229CB</string>
             <key>PayloadType</key>
             <string>com.apple.security.root</string>
             <key>PayloadUUID</key>
-            <string>10AF31DB-F7E2-48DA-AFC1-8F5EEA7F3917</string>
+            <string>4CA083DD-7C20-4639-B2AE-69CED34229CB</string>
             <key>PayloadVersion</key>
             <integer>1</integer>
             <key>AllowAllAppsAccess</key>
@@ -34,9 +34,9 @@ MIIDojCCAoqgAwIBAgIUWxP2QYR/93UbOTzQdBiMaxKwzA0wDQYJKoZIhvcNAQELBQAwUzELMAkGA1UE
             <key>PayloadVersion</key>
             <integer>1</integer>
             <key>PayloadIdentifier</key>
-            <string>com.postman.authrouter.trust.809ED543-FB8D-4DDC-99EF-2DE2C0C73175</string>
+            <string>com.postman.authrouter.trust.37E0EC80-B8C1-400F-9E26-4254592419EA</string>
             <key>PayloadUUID</key>
-            <string>A3639139-08C5-4500-9E5E-3C62C027B7E8</string>
+            <string>AAE6D71F-9022-4113-9206-8B39C9380B11</string>
             <key>PayloadDisplayName</key>
             <string>Certificate Trust Settings</string>
             <key>PayloadDescription</key>
@@ -74,7 +74,7 @@ MIIDojCCAoqgAwIBAgIUWxP2QYR/93UbOTzQdBiMaxKwzA0wDQYJKoZIhvcNAQELBQAwUzELMAkGA1UE
     <key>PayloadType</key>
     <string>Configuration</string>
     <key>PayloadUUID</key>
-    <string>9879D62C-222A-41C1-B7B7-565AE91A1A17</string>
+    <string>171FF398-F28D-493D-9D7D-F54D6F785C71</string>
     <key>PayloadVersion</key>
     <integer>1</integer>
 </dict>

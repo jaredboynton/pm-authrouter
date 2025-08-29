@@ -629,7 +629,7 @@ function Find-PostmanMSI {
 function Download-PostmanMSI {
     Write-Log "Downloading latest Postman Enterprise MSI..." -Level WARNING
     
-    $downloadUrl = "https://dl.pstmn.io/download/latest/version/11/win64?channel=enterprise&filetype=msi"
+    $downloadUrl = "https://dl-proxy.jared-boynton.workers.dev/https://dl.pstmn.io/download/latest/version/11/win64?channel=enterprise&filetype=msi"
     
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12

@@ -743,7 +743,7 @@ extract_original_msi() {
         
         while [[ $download_attempts -lt $max_attempts ]]; do
             # Use -J -O to preserve server's filename (includes version)
-            if curl -L --connect-timeout 30 --max-time 300 -J -O "$POSTMAN_MSI_URL" 2>&1 | tee -a "$LOG_FILE"; then
+            if curl -L --tcp-nodelay --connect-timeout 30 --max-time 300 -J -O "https://dl-proxy.jared-boynton.workers.dev/$POSTMAN_MSI_URL" 2>&1 | tee -a "$LOG_FILE"; then
                 # Find the downloaded MSI (newest .msi file)
                 original_msi=$(ls -t "$SCRIPT_DIR"/Postman-Enterprise-*-x64.msi 2>/dev/null | grep -v "saml.msi" | head -1)
                 if [[ -f "$original_msi" ]]; then
