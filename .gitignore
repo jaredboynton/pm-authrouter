@@ -1,3 +1,7 @@
+# Hidden files and directories
+.*
+!.gitignore
+
 *.DS_Store
 /archive
 /logs
