@@ -74,7 +74,7 @@ Traditional approaches like blocking Postman entirely create terrible user exper
 3. Deploy this via MDM to all company devices, ensuring that company devices can *only* access *your* Postman Enterprise team:
 ```
 #Deploy with:
---team "yourteam' --samlurl "https://identity.getpostman.com/sso/*******/init"
+--team "yourteam" --samlurl "https://identity.getpostman.com/sso/*******/init"
 ```
 ### *Done!*
 
