@@ -395,16 +395,10 @@ check_dependencies() {
         validation_error "DEPENDENCY_CHECK" "Missing required tools: ${missing_tools[*]}. Please install using: brew install ${missing_tools[*]}"
     fi
     
-    # Validate Go can cross-compile to Darwin
-    if ! GOOS=darwin GOARCH=arm64 go env GOROOT >/dev/null 2>&1; then
-        validation_error "DEPENDENCY_CHECK" "Go cross-compilation not available for Darwin"
-    fi
-    
     validation_success "DEPENDENCY_CHECK" "All required tools are available and functional"
 }
 
 log "INFO" "=== PKG Builder v$SCRIPT_VERSION - Enterprise Grade with Validation ==="
-log "INFO" "Building Combined Postman Enterprise + AuthRouter PKG"
 log "INFO" "Team Name: ${TEAM_NAME:-[not configured]}"
 log "INFO" "SAML URL: ${SAML_URL:-[not configured]}"
 
@@ -417,9 +411,6 @@ validate_arguments() {
         log "WARN" "No SAML URL provided. Service will be installed but not activated."
         log "INFO" "  Configure via MDM Configuration Profile with samlUrl key"
     else
-        if [[ ! "$SAML_URL" =~ ^https?:// ]]; then
-            log "WARN" "SAML URL should be a valid HTTP/HTTPS URL: $SAML_URL"
-        fi
         
         # Validate SAML URL format
         if [[ ! "$SAML_URL" =~ ^https://identity\.getpostman\.com/ ]]; then
@@ -442,10 +433,6 @@ validate_arguments() {
         
         if [[ ${#TEAM_NAME} -gt 100 ]]; then
             log "WARN" "Team name too long (maximum 100 characters recommended): $TEAM_NAME"
-        fi
-        
-        if [[ "$TEAM_NAME" == *\"* ]] || [[ "$TEAM_NAME" == *\'* ]] || [[ "$TEAM_NAME" == *\<* ]] || [[ "$TEAM_NAME" == *\>* ]] || [[ "$TEAM_NAME" == *\&* ]]; then
-            log "WARN" "Team name contains special characters that may need escaping: $TEAM_NAME"
         fi
     fi
     
@@ -523,8 +510,7 @@ download_pkg() {
         log "DEBUG" "Downloading from: $url"
         
         # Use -J and -O to respect Content-Disposition header for filename
-        # Note: Cannot use -C (resume) with -J (remote-header-name)
-        local curl_opts=(-L --tcp-nodelay --connect-timeout 57 --max-time 900 --retry 2 --retry-delay 3 --retry-max-time 300 -A "pm-authrouter" -J -O)
+        local curl_opts=(-L --tcp-nodelay --connect-timeout 10 --max-time 60 --retry 2 --retry-delay 3 --retry-max-time 300 -A "pm-authrouter" -J -O)
         if [[ "$DEBUG_MODE" == "1" ]]; then
             # Debug mode: verbose output, show progress
             curl_opts+=(--verbose --progress-bar)
@@ -1021,7 +1007,7 @@ build_pkg_for_arch() {
         validation_error "BUILD_SETUP" "Failed to change to project root: $PROJECT_ROOT"
     }
     
-    if ! env GOOS=darwin GOARCH=$GOARCH go build -ldflags="-w" -o "$SCRIPT_DIR/pm-authrouter-$ARCH" ./cmd/pm-authrouter; then
+    if ! env GOOS=darwin GOARCH=$GOARCH go build -ldflags="-w -s" -o "$SCRIPT_DIR/pm-authrouter-$ARCH" ./cmd/pm-authrouter; then
         validation_error "BINARY_BUILD" "Failed to build AuthRouter binary for $ARCH"
     fi
     log "SUCCESS" "Built AuthRouter binary for $ARCH"

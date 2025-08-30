@@ -42,13 +42,20 @@ Every deployment needs these 2 components:
 ### 1. Software Package
 Deploy the MSI via your MDM, GPO, or SCCM.
 
+**Note:** Manual installation requires PowerShell with Administrator privileges:
+```powershell
+# Run PowerShell as Administrator, then:
+msiexec /i "C:\path\to\Postman-Enterprise-VERSION-x64-saml.msi" /qn
+```
+
 ### 2. SAML Configuration
 Choose one:
 
 **Option A: Runtime Config (Recommended)**
-Install with MSI properties:
+Install with MSI properties (requires admin):
 
 ```cmd
+# From elevated Command Prompt or PowerShell:
 msiexec /i installer.msi TEAM_NAME="YOURTEAM" SAML_URL="https://identity.getpostman.com/*****/init" /qn
 ```
 

@@ -24,8 +24,8 @@ Comprehensive test suite for validating the Postman Enterprise AuthRouter build 
 
 ### Build Process Tests
 
-- **`Test-BuildMsiWix3.ps1`** - WiX 3.11 build process validation
-  - WiX Toolset 3.11 installation and tool detection
+- **`Test-BuildMsiWix3.ps1`** - WiX build process validation (supports v3.x and v4.x)
+  - WiX Toolset installation and tool detection (v3.x/v4.x)
   - WXS compilation with proper namespaces and schemas
   - ServiceInstall and ServiceControl element validation
   - 5-phase validation framework integration
@@ -35,7 +35,7 @@ Comprehensive test suite for validating the Postman Enterprise AuthRouter build 
 
 - **`Test-MsiValidation.ps1`** - Comprehensive 5-phase validation framework
   - **Phase 1**: Environment validation (PowerShell, Windows version, privileges, disk space)
-  - **Phase 2**: Dependencies validation (Go 1.21+, WiX 3.11, winget)
+  - **Phase 2**: Dependencies validation (Go 1.21+, WiX v3.x/v4.x)
   - **Phase 3**: Source files validation (project structure, Go modules, deployment scripts)
   - **Phase 4**: Build process validation (Go compilation, WiX compilation, MSI extraction)
   - **Phase 5**: Output validation (MSI size limits, structure requirements, GUID formats)
@@ -58,7 +58,7 @@ Comprehensive test suite for validating the Postman Enterprise AuthRouter build 
   - MSI component breakdown and recommendations
 
 - **`Test-BuildEdgeCases.ps1`** - Edge cases and error handling
-  - Dependency installation failures (WiX 3.11, Go, winget)
+  - Dependency installation failures (WiX, Go)
   - Build process interruption and recovery scenarios
   - File system edge cases (paths with spaces, Unicode, permissions)
   - MSI extraction failures and corruption handling
@@ -386,7 +386,7 @@ Comprehensive test suite for validating the Postman Enterprise AuthRouter build 
 
 ### Platform Support
 - **macOS**: Intel (x64) and Apple Silicon (ARM64) architectures
-- **Windows**: Windows 10/11 with WiX 3.11 toolset
+- **Windows**: Windows 10/11 with WiX toolset (v3.x or v4.x)
 - **Cross-compilation**: Full support for building on any platform
 
 ### Enterprise Requirements
@@ -399,6 +399,8 @@ Comprehensive test suite for validating the Postman Enterprise AuthRouter build 
 ## Running Tests
 
 ### Windows
+
+**IMPORTANT: Run PowerShell as Administrator for all Windows deployment testing**
 
 **Essential Tests (Simple Runner):**
 ```powershell
@@ -441,7 +443,7 @@ Comprehensive test suite for validating the Postman Enterprise AuthRouter build 
 
 **Individual Windows Tests:**
 ```powershell
-# WiX 3.11 build process
+# WiX build process
 .\test\windows\Test-BuildMsiWix3.ps1
 
 # 5-phase validation framework
@@ -561,7 +563,7 @@ Comprehensive test suite for validating the Postman Enterprise AuthRouter build 
 ## Key Test Validations
 
 ### Build Process Validation
-- **Dependencies**: Go 1.21+, WiX 3.11, winget availability and functionality
+- **Dependencies**: Go 1.21+, WiX toolset (v3.x/v4.x)
 - **Binary Compilation**: Cross-platform builds with proper optimization flags  
 - **Certificate Generation**: Self-signed certificates with system trust installation
 - **Package Assembly**: MSI/PKG creation with compression and size optimization
@@ -638,7 +640,7 @@ Comprehensive test suite for validating the Postman Enterprise AuthRouter build 
 **Service Installation Failures**
 - Verify Administrator privileges on Windows
 - Check for port 443 conflicts (`netstat -an | findstr :443`)
-- Validate WiX 3.11 toolset installation
+- Validate WiX toolset installation (v3.x/v4.x)
 - Review Windows Event Log for service errors
 
 **Certificate Trust Issues**
@@ -694,6 +696,6 @@ Comprehensive test suite for validating the Postman Enterprise AuthRouter build 
 - **Administrative Privileges**: Required for service installation and testing
 - **Clean Environment**: No conflicting services on port 443
 - **Network Connectivity**: Access to identity.getpostman.com for integration tests
-- **Build Tools**: Platform-appropriate toolchain (WiX 3.11, Xcode, Go 1.21+)
+- **Build Tools**: Platform-appropriate toolchain (WiX v3.x/v4.x, Xcode, Go 1.21+)
 
 This comprehensive test suite validates the Postman AuthRouter across all deployment scenarios, with emphasis on enterprise requirements, security, and the critical 125MB size constraint for Windows MSI packages.

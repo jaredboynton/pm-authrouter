@@ -41,10 +41,11 @@ Dependencies = @{
                 "${env:ProgramFiles}\WiX Toolset v3.11\bin"
             )
         }
-        Winget = @{
-            Command = "winget"
-            TestCommand = "winget --version"
-        }
+        # Note: Winget not used in build scripts - they download directly from GitHub
+        # Winget = @{
+        #     Command = "winget"
+        #     TestCommand = "winget --version"
+        # }
     }
 }
 
@@ -237,32 +238,33 @@ Describe "MSI Validation Framework Tests" -Tag "Fast", "Unit" {
             }
         }
         
-        It "Should validate winget availability" {
-            try {
-                $wingetExists = Get-Command winget -ErrorAction SilentlyContinue
-                if ($wingetExists) {
-                    $wingetExists | Should Not BeNullOrEmpty
-                } else {
-                    Pending "winget not available"
-                }
-            } catch {
-                Pending "Cannot check winget installation"
-            }
-        }
+        # Note: Winget tests commented out - build scripts use direct downloads instead
+        # It "Should validate winget availability" {
+        #     try {
+        #         $wingetExists = Get-Command winget -ErrorAction SilentlyContinue
+        #         if ($wingetExists) {
+        #             $wingetExists | Should Not BeNullOrEmpty
+        #         } else {
+        #             Pending "winget not available"
+        #         }
+        #     } catch {
+        #         Pending "Cannot check winget installation"
+        #     }
+        # }
         
-        It "Should validate winget functionality" {
-            try {
-                if (Get-Command winget -ErrorAction SilentlyContinue) {
-                    $wingetVersion = & winget --version 2>$null
-                    $wingetVersion | Should Not BeNullOrEmpty
-                    $wingetVersion | Should Match "v\d+\.\d+"
-                } else {
-                    Pending "winget not installed"
-                }
-            } catch {
-                Pending "winget command failed"
-            }
-        }
+        # It "Should validate winget functionality" {
+        #     try {
+        #         if (Get-Command winget -ErrorAction SilentlyContinue) {
+        #             $wingetVersion = & winget --version 2>$null
+        #             $wingetVersion | Should Not BeNullOrEmpty
+        #             $wingetVersion | Should Match "v\d+\.\d+"
+        #         } else {
+        #             Pending "winget not installed"
+        #         }
+        #     } catch {
+        #         Pending "winget command failed"
+        #     }
+        # }
         
         It "Should validate Visual Studio Build Tools (if required)" {
             # Check for MSBuild or Visual Studio Build Tools
@@ -591,7 +593,7 @@ Describe "MSI Validation Framework Tests" -Tag "Fast", "Unit" {
 Write-Host "`n=== MSI Validation Framework Test Summary ===" -ForegroundColor Cyan
 Write-Host "Validated all 5 phases:" -ForegroundColor White
 Write-Host "  1. Environment Validation - System requirements and privileges" -ForegroundColor Gray
-Write-Host "  2. Dependencies Validation - Go, WiX 3.11, winget availability" -ForegroundColor Gray
+Write-Host "  2. Dependencies Validation - Go, WiX 3.11" -ForegroundColor Gray
 Write-Host "  3. Source Files Validation - Project structure and integrity" -ForegroundColor Gray
 Write-Host "  4. Build Process Validation - Compilation and toolchain" -ForegroundColor Gray
 Write-Host "  5. Output Validation - MSI quality and constraints" -ForegroundColor Gray

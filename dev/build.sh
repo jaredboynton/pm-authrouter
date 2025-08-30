@@ -1,8 +1,6 @@
 #!/bin/bash
 
 # Build script for Postman AuthRouter
-# Uses -ldflags="-w" to strip DWARF debug info (30% size reduction)
-# Keeps symbols for stack traces (enterprise-friendly debugging)
 set -e
 
 # Change to project root directory
@@ -20,15 +18,15 @@ go mod download
 
 # Build for macOS Intel
 echo "Building for macOS Intel..."
-GOOS=darwin GOARCH=amd64 go build -ldflags="-w" -o dev/bin/pm-authrouter-darwin-intel ./cmd/pm-authrouter
+GOOS=darwin GOARCH=amd64 go build -ldflags="-w -s" -o dev/bin/pm-authrouter-darwin-intel ./cmd/pm-authrouter
 
 # Build for macOS Apple Silicon
 echo "Building for macOS Apple Silicon..."
-GOOS=darwin GOARCH=arm64 go build -ldflags="-w" -o dev/bin/pm-authrouter-darwin-arm64 ./cmd/pm-authrouter
+GOOS=darwin GOARCH=arm64 go build -ldflags="-w -s" -o dev/bin/pm-authrouter-darwin-arm64 ./cmd/pm-authrouter
 
 # Build for Windows
 echo "Building for Windows..."
-GOOS=windows GOARCH=amd64 go build -ldflags="-w" -o dev/bin/pm-authrouter.exe ./cmd/pm-authrouter
+GOOS=windows GOARCH=amd64 go build -ldflags="-w -s" -o dev/bin/pm-authrouter.exe ./cmd/pm-authrouter
 
 # Build Windows service wrapper if needed (optional, since main binary handles it now)
 # echo "Building Windows service wrapper..."
@@ -42,7 +40,7 @@ echo ""
 echo "Available binaries:"
 ls -lh dev/bin/
 echo ""
-echo "Binary sizes are optimized with DWARF stripping (-ldflags=\"-w\")"
+echo "Binary sizes are optimized with debug info and symbol stripping (-ldflags=\"-w -s\")"
 echo "Expected final installer sizes after compression:"
 echo "  Windows MSI: ~5-6MB"
 echo "  macOS PKG:   ~4-5MB"

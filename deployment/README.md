@@ -59,7 +59,7 @@ Build generic package, configure during deployment:
 
 ### 4. Deploy Package
 Use your preferred method:
-- **Direct**: `sudo installer -pkg package.pkg -target /` (macOS) or `msiexec /i package.msi /quiet` (Windows)
+- **Direct**: `sudo installer -pkg package.pkg -target /` (macOS) or `msiexec /i package.msi /quiet` (Windows - requires admin/PowerShell)
 - **MDM**: Jamf, Intune, SCCM, Workspace ONE
 - **GPO**: Windows Group Policy
 

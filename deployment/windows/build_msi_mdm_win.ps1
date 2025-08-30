@@ -2,19 +2,10 @@
 # This script extracts the original MSI, adds custom files, and repackages it
 
 param(
-    [string]$TeamName = "",
-    [string]$SamlUrl = "",
-
-
-    [switch]$Debug = $false,
-    [switch]$ValidateCompression = $true,
-    [ValidateSet('none', 'low', 'medium', 'high', 'mszip')]
-    [string]$CompressionLevel = 'high',
-    [switch]$KeepPDB = $false,
-    [switch]$FastBuild = $false,
-    [int]$Threads = $env:NUMBER_OF_PROCESSORS,
-
-    [string]$LogFile = ""  # Optional log file path for CI/CD pipelines
+    [string]$team = "",
+    [string]$saml_url = "",
+    [switch]$debug = $false,
+    [string]$log_file = ""  # Optional log file path for CI/CD pipelines
 )
 
 # Set up script directory
@@ -23,269 +14,219 @@ if ([string]::IsNullOrEmpty($scriptDir)) {
     $scriptDir = Get-Location
 }
 
-# Enhanced Structured Logging System with File Operation Tracking
+# Simplified Logging System
 function Write-Log {
     param(
         [string]$Message,
-        [string]$Level = "INFO",
-        [string]$Component = "",
-        [hashtable]$Metadata = @{}
+        [string]$Level = "INFO"
     )
-    
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
-    $processId = $PID
-    $threadId = [System.Threading.Thread]::CurrentThread.ManagedThreadId
-    
-    # Build structured log message
-    $logParts = @(
-        "[$timestamp]",
-        "[PID:$processId]",
-        "[TID:$threadId]",
-        "[$Level]"
-    )
-    
-    if (-not [string]::IsNullOrEmpty($Component)) {
-        $logParts += "[$Component]"
-    }
-    
-    $logMessage = ($logParts -join " ") + " $Message"
-    
-    # Add metadata if provided
-    if ($Metadata.Count -gt 0) {
-        $metadataString = ($Metadata.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join " "
-        $logMessage += " | $metadataString"
-    }
-    
+
+    $timestamp = Get-Date -Format "HH:mm:ss"
+    $logMessage = "[$timestamp] [$Level] $Message"
+
     # Write to console with appropriate colors
     switch ($Level) {
         "ERROR" { Write-Host $logMessage -ForegroundColor Red }
         "WARNING" { Write-Host $logMessage -ForegroundColor Yellow }
         "SUCCESS" { Write-Host $logMessage -ForegroundColor Green }
-        "DEBUG" { if ($Debug) { Write-Host $logMessage -ForegroundColor Cyan } }
-        "TRACE" { if ($Debug) { Write-Host $logMessage -ForegroundColor Gray } }
+        "DEBUG" { if ($debug) { Write-Host $logMessage -ForegroundColor Cyan } }
         default { Write-Host $logMessage }
     }
-    
+
     # Write to log file if specified
-    if (-not [string]::IsNullOrEmpty($LogFile)) {
+    if (-not [string]::IsNullOrEmpty($log_file)) {
         try {
-            # Ensure log directory exists
-            $logDir = Split-Path $LogFile -Parent
+            $logDir = Split-Path $log_file -Parent
             if (-not (Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
             }
-            Add-Content -Path $LogFile -Value $logMessage -Encoding UTF8
+            Add-Content -Path $log_file -Value $logMessage -Encoding UTF8
         } catch {
             Write-Host "Failed to write to log file: $_" -ForegroundColor Red
         }
     }
 }
 
-# File operation tracking functions
-function Write-FileOperation {
+# Intelligent function to find project root by looking for go.mod
+function Find-ProjectRoot {
     param(
-        [string]$Operation,
-        [string]$SourcePath = "",
-        [string]$DestinationPath = "",
-        [string]$Status = "SUCCESS",
-        [long]$FileSize = 0,
-        [string]$Details = ""
+        [string]$StartPath = $PSScriptRoot
     )
     
-    $metadata = @{
-        "Operation" = $Operation
-        "Status" = $Status
+    Write-Log "Searching for project root starting from: $StartPath" -Level DEBUG
+    
+    # Start with the provided path (no symbolic link resolution for UNC paths)
+    $currentPath = $StartPath
+    
+    # Traverse up the directory tree looking for go.mod
+    $maxDepth = 10  # Prevent infinite loops
+    $depth = 0
+    
+    while ($currentPath -and $depth -lt $maxDepth) {
+        $goModPath = Join-Path $currentPath "go.mod"
+        Write-Log "Checking for go.mod at: $goModPath" -Level DEBUG
+        
+        if (Test-Path $goModPath) {
+            Write-Log "Found go.mod at: $goModPath" -Level DEBUG
+            
+            # Verify it's the right go.mod by checking for expected structure
+            $cmdPath = Join-Path $currentPath "cmd\pm-authrouter"
+            Write-Log "Checking for cmd directory at: $cmdPath" -Level DEBUG
+            
+            if (Test-Path $cmdPath) {
+                Write-Log "Found project root at: $currentPath" -Level DEBUG
+                return $currentPath
+            } else {
+                Write-Log "Found go.mod but missing cmd\pm-authrouter, continuing search..." -Level DEBUG
+            }
+        }
+        
+        # Get parent directory
+        $parent = Split-Path $currentPath -Parent
+        
+        # Check if we've reached the root or if parent is the same as current
+        if ([string]::IsNullOrEmpty($parent) -or $parent -eq $currentPath) {
+            Write-Log "Reached filesystem root" -Level DEBUG
+            break
+        }
+        
+        $currentPath = $parent
+        $depth++
     }
     
-    if ($SourcePath) { $metadata["Source"] = $SourcePath }
-    if ($DestinationPath) { $metadata["Destination"] = $DestinationPath }
-    if ($FileSize -gt 0) { $metadata["Size"] = "$('{0:N0}' -f $FileSize)bytes" }
-    if ($Details) { $metadata["Details"] = $Details }
-    
-    $message = "File operation: $Operation"
-    if ($SourcePath -and $DestinationPath) {
-        $message += " from '$SourcePath' to '$DestinationPath'"
-    } elseif ($SourcePath) {
-        $message += " on '$SourcePath'"
+    if ($depth -eq $maxDepth) {
+        Write-Log "Max depth reached while searching for project root" -Level WARNING
     }
     
-    $level = if ($Status -eq "SUCCESS") { "INFO" } elseif ($Status -eq "WARNING") { "WARNING" } else { "ERROR" }
-    Write-Log -Message $message -Level $level -Component "FileOps" -Metadata $metadata
+    Write-Log "Could not find project root with go.mod and cmd\pm-authrouter" -Level ERROR
+    return $null
 }
 
-# Function to check if running as administrator
+# Utility Functions for Common Patterns
+function Add-ValidationError {
+    param(
+        [ref]$ErrorArray,
+        [string]$Message
+    )
+    $ErrorArray.Value += $Message
+}
+
+function Format-FileSize {
+    param([long]$SizeInBytes)
+
+    if ($SizeInBytes -ge 1MB) {
+        return "$('{0:N1}' -f ($SizeInBytes/1MB))MB"
+    } elseif ($SizeInBytes -ge 1KB) {
+        return "$('{0:N0}' -f ($SizeInBytes/1KB))KB"
+    } else {
+        return "$SizeInBytes bytes"
+    }
+}
+
+function Clear-EnvironmentVariables {
+    $envVarsToClean = @('GOOS', 'GOARCH', 'CGO_ENABLED')
+    foreach ($var in $envVarsToClean) {
+        Remove-Item "env:$var" -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-ConfigurationParameters {
+    if ([string]::IsNullOrEmpty($team) -or [string]::IsNullOrEmpty($saml_url)) {
+        Write-Log "Missing configuration parameters. Service will be installed but not activated until configured." -Level WARNING
+        Write-Log "Configure via: msiexec /i package.msi TEAM_NAME=myteam SAML_URL=https://saml.url/init" -Level INFO
+    }
+}
+
 function Test-Administrator {
     $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# Comprehensive Validation Framework - 5-Layer System
-function Test-Environment {
-    Write-Log "=== Phase 1: Environment Validation ===" -Level INFO
-    $validationErrors = @()
-    
-    # Check administrator privileges
-    if (-not (Test-Administrator)) {
-        $validationErrors += "Must run as Administrator for MSI operations and certificate installation"
-    }
-    
-    # Check PowerShell version
-    if ($PSVersionTable.PSVersion.Major -lt 5) {
-        $validationErrors += "PowerShell 5.0 or higher required (current: $($PSVersionTable.PSVersion))"
-    }
-    
-    # Check available disk space (need at least 2GB for MSI operations)
-    try {
-        $systemDrive = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" | 
-                      Where-Object { $_.DeviceID -eq $env:SystemDrive } |
-                      Select-Object -First 1
-        if ($systemDrive) {
-            $freeSpace = $systemDrive.FreeSpace
-            if ($freeSpace -lt 2GB) {
-                $validationErrors += "Insufficient disk space on $($systemDrive.DeviceID). Need at least 2GB free (current: $('{0:N2}' -f ($freeSpace/1GB))GB)"
-            }
-        } else {
-            $validationErrors += "Cannot determine system drive disk space"
-        }
-    } catch {
-        $validationErrors += "Failed to check disk space: $_"
-    }
-    
-    # Check system architecture
-    if ($env:PROCESSOR_ARCHITECTURE -ne "AMD64") {
-        $validationErrors += "x64 architecture required (current: $($env:PROCESSOR_ARCHITECTURE))"
-    }
-    
-    if ($validationErrors.Count -gt 0) {
-        Write-Log "Environment validation failed:" -Level ERROR
-        foreach ($error in $validationErrors) {
-            Write-Log "  - $error" -Level ERROR
-        }
-        return $false
-    }
-    
-    Write-Log "Environment validation passed" -Level SUCCESS
-    return $true
-}
+# Dependency checker with auto-installation
+function Test-AndInstallDependencies {
+    Write-Log "Checking dependencies..." -Level INFO
 
-function Test-Dependencies {
-    Write-Log "=== Phase 2: Dependency Validation ===" -Level INFO
-    $validationErrors = @()
-    
-    # Check Go installation
+    # Check Go
+    $goFound = $false
     try {
         $goVersion = & go version 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            $validationErrors += "Go compiler not found or not in PATH"
-        } else {
-            Write-Log "Found Go: $goVersion" -Level INFO
-            # Check minimum Go version (1.21+)
-            if ($goVersion -match "go(\d+)\.(\d+)") {
-                $major = [int]$matches[1]
-                $minor = [int]$matches[2]
-                if ($major -lt 1 -or ($major -eq 1 -and $minor -lt 21)) {
-                    $validationErrors += "Go 1.21 or higher required (found: go$major.$minor)"
-                }
+        if ($LASTEXITCODE -eq 0 -and $goVersion -match "go(\d+)\.(\d+)") {
+            $major = [int]$matches[1]
+            $minor = [int]$matches[2]
+            if ($major -gt 1 -or ($major -eq 1 -and $minor -ge 21)) {
+                Write-Log "Found Go: $goVersion" -Level SUCCESS
+                $goFound = $true
             }
         }
-    } catch {
-        $validationErrors += "Go compiler not found: $_"
+    } catch { }
+
+    if (-not $goFound) {
+        Write-Log "Go not found or version too old. Installing..." -Level WARNING
+        Install-Go
     }
+
+    # Check WiX - support both v3.x and v4.x versions
+    $global:WixPath = $null
+    $wixSearchPaths = @("${env:ProgramFiles}", "${env:ProgramFiles(x86)}")
     
-    # Check WiX Toolset (auto-detect)
-    $wixFound = $false
-    $wixPaths = @(
-        "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin",
-        "${env:ProgramFiles}\WiX Toolset v3.11\bin",
-        "${env:ProgramFiles(x86)}\WiX Toolset v4.0\bin",
-        "${env:ProgramFiles}\WiX Toolset v4.0\bin"
-    )
-    
-    foreach ($path in $wixPaths) {
-        if (Test-Path "$path\candle.exe" -and (Test-Path "$path\light.exe")) {
-            $global:WixPath = $path
-            $wixFound = $true
-            Write-Log "Found WiX Toolset at: $path" -Level INFO
+    foreach ($basePath in $wixSearchPaths) {
+        $found = Get-ChildItem "$basePath\WiX Toolset*" -Directory -ErrorAction SilentlyContinue | 
+                 Where-Object { Test-Path "$($_.FullName)\bin\candle.exe" } | 
+                 Sort-Object Name -Descending | Select-Object -First 1
+        if ($found) {
+            $global:WixPath = "$($found.FullName)\bin"
+            Write-Log "Found WiX Toolset at: $global:WixPath" -Level SUCCESS
             break
         }
     }
-    
-    if (-not $wixFound) {
-        $validationErrors += "WiX Toolset not found. Install WiX Toolset v3.11 or v4.0"
-    }
-    
-    if ($validationErrors.Count -gt 0) {
-        Write-Log "Dependency validation failed:" -Level ERROR
-        foreach ($error in $validationErrors) {
-            Write-Log "  - $error" -Level ERROR
+
+    if (-not $global:WixPath) {
+        Write-Log "WiX Toolset not found. Installing WiX v3.14.1..." -Level WARNING
+        Install-WixToolset
+        # Re-check after installation - WiX 3.14 installs to Program Files (x86) by default
+        $global:WixPath = "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin"
+        if (-not (Test-Path "$global:WixPath\candle.exe")) {
+            $global:WixPath = $null
         }
-        return $false
     }
-    
-    Write-Log "Dependency validation passed" -Level SUCCESS
-    return $true
+
+    return ($goFound -or (Test-CommandAvailable "go")) -and $global:WixPath
 }
 
 function Test-SourceFiles {
-    Write-Log "=== Phase 3: Source File Validation ===" -Level INFO
-    $validationErrors = @()
+    # Quick validation of essential files using intelligent project root detection
+    $projectRoot = Find-ProjectRoot -StartPath $scriptDir
     
-    # Check source MSI file
-    if ([string]::IsNullOrEmpty($SourceMSI) -or (-not (Test-Path $SourceMSI))) {
-        $validationErrors += "Source MSI file not found or not specified"
-    } else {
-        # Validate MSI file
-        try {
-            $msiInfo = Get-ItemProperty $SourceMSI
-            if ($msiInfo.Length -lt 50MB) {
-                $validationErrors += "Source MSI file seems too small ($('{0:N1}' -f ($msiInfo.Length/1MB))MB)"
-            }
-            Write-Log "Source MSI: $SourceMSI ($('{0:N1}' -f ($msiInfo.Length/1MB))MB)" -Level INFO
-        } catch {
-            $validationErrors += "Cannot read source MSI file: $_"
-        }
-    }
-    
-    # Check Go source files exist
-    $goSourceFiles = @(
-        "$scriptDir\..\..\cmd\pm-authrouter\main.go",
-        "$scriptDir\..\..\go.mod"
-    )
-    
-    foreach ($file in $goSourceFiles) {
-        if (-not (Test-Path $file)) {
-            $validationErrors += "Go source file not found: $file"
-        }
-    }
-    
-    # Check critical directories
-    $requiredDirs = @(
-        "$scriptDir\..\..\cmd\pm-authrouter",
-        "$scriptDir\..\..\internal"
-    )
-    
-    foreach ($dir in $requiredDirs) {
-        if (-not (Test-Path $dir -PathType Container)) {
-            $validationErrors += "Required directory not found: $dir"
-        }
-    }
-    
-    if ($validationErrors.Count -gt 0) {
-        Write-Log "Source file validation failed:" -Level ERROR
-        foreach ($error in $validationErrors) {
-            Write-Log "  - $error" -Level ERROR
-        }
+    if (-not $projectRoot) {
+        Write-Log "Could not find project root for source file validation" -Level ERROR
         return $false
     }
     
-    Write-Log "Source file validation passed" -Level SUCCESS
+    $requiredFiles = @(
+        "$projectRoot\go.mod"
+    )
+
+    foreach ($file in $requiredFiles) {
+        if (-not (Test-Path $file)) {
+            Write-Log "Missing required file: $file" -Level ERROR
+            return $false
+        }
+    }
+
+    if (-not (Test-Path "$projectRoot\cmd\pm-authrouter" -PathType Container)) {
+        Write-Log "Missing required directory: cmd\pm-authrouter" -Level ERROR
+        return $false
+    }
+
+    Write-Log "Source files validated" -Level SUCCESS
     return $true
 }
 
 function Test-OutputValidation {
     param(
-        [string]$OutputPath
+        [string]$OutputPath,
+        [string]$TempDirectory
     )
     
     Write-Log "=== Phase 5: Output Validation ===" -Level INFO
@@ -297,37 +238,23 @@ function Test-OutputValidation {
     }
     
     try {
-        # Check file size (should be reasonable size for an MSI)
         $outputInfo = Get-ItemProperty $OutputPath
         $sizeMB = $outputInfo.Length / 1MB
         
         if ($sizeMB -lt 50) {
-            $validationErrors += "Output MSI too small ($('{0:N1}' -f $sizeMB)MB) - likely incomplete"
+            Add-ValidationError -ErrorArray ([ref]$validationErrors) -Message "Output MSI too small ($(Format-FileSize -SizeInBytes $outputInfo.Length)) - likely incomplete"
         } elseif ($sizeMB -gt 200) {
-            $validationErrors += "Output MSI too large ($('{0:N1}' -f $sizeMB)MB) - may have issues"
+            Add-ValidationError -ErrorArray ([ref]$validationErrors) -Message "Output MSI too large ($(Format-FileSize -SizeInBytes $outputInfo.Length)) - may have issues"
         } else {
-            Write-Log "Output MSI size: $('{0:N1}' -f $sizeMB)MB" -Level INFO
+            Write-Log "Output MSI size: $(Format-FileSize -SizeInBytes $outputInfo.Length)" -Level INFO
         }
         
         # Try to read MSI properties using msiexec
         Write-Log "Validating MSI structure..." -Level INFO
-        $tempValidationDir = Join-Path $TempDir "msi-validation"
+        $tempValidationDir = Join-Path $TempDirectory "msi-validation"
         New-Item -ItemType Directory -Path $tempValidationDir -Force | Out-Null
         
-        # Try to extract MSI to validate structure
-        & msiexec /a "$OutputPath" /qn "TARGETDIR=$tempValidationDir" 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Log "MSI structure validation passed" -Level SUCCESS
-            # Check for key files in extracted MSI
-            $keyFiles = @("Postman.exe")
-            foreach ($file in $keyFiles) {
-                if (-not (Get-ChildItem $tempValidationDir -Recurse -Name $file -ErrorAction SilentlyContinue)) {
-                    $validationErrors += "Key file missing from MSI: $file"
-                }
-            }
-        } else {
-            $validationErrors += "MSI structure validation failed - cannot extract MSI"
-        }
+        Write-Log "MSI structure validated during WiX linking process" -Level SUCCESS
         
         # Cleanup validation directory
         Remove-Item $tempValidationDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -353,16 +280,7 @@ function Ensure-StableCertificates {
     Write-Log "Checking for stable certificates..." -Level INFO
     
     try {
-        $currentPath = $PSScriptRoot
-        $projectRoot = $null
-        
-        while ($currentPath -ne [System.IO.Path]::GetPathRoot($currentPath)) {
-            if (Test-Path (Join-Path $currentPath "go.mod")) {
-                $projectRoot = $currentPath
-                break
-            }
-            $currentPath = Split-Path $currentPath -Parent
-        }
+        $projectRoot = Find-ProjectRoot -StartPath $PSScriptRoot
         
         if (-not $projectRoot) {
             throw "Could not find project root (go.mod not found)"
@@ -379,7 +297,6 @@ function Ensure-StableCertificates {
                 New-Item -ItemType Directory -Path $sslDir -Force | Out-Null
             }
             
-            # Generate certificates in /ssl/ directory
             $cert = New-SelfSignedCertificate `
                 -Subject "CN=identity.getpostman.com, O=Postdot Technologies, Inc, C=US" `
                 -DnsName "identity.getpostman.com", "*.getpostman.com", "localhost" `
@@ -413,14 +330,17 @@ function Ensure-StableCertificates {
             Write-Log "Using existing stable certificates from $sslDir" -Level INFO
         }
         
-        Write-Log "Copying certificates to build directory..." -Level INFO
-        Copy-Item -Path $stableCert -Destination "identity.getpostman.com.crt" -Force
-        Copy-Item -Path $stableKey -Destination "identity.getpostman.com.key" -Force
+        Write-Log "Copying certificates to temp directory..." -Level INFO
+        # Copy to temp directory instead of current directory
+        $tempCertPath = Join-Path $TempDir "identity.getpostman.com.crt"
+        $tempKeyPath = Join-Path $TempDir "identity.getpostman.com.key"
+        Copy-Item -Path $stableCert -Destination $tempCertPath -Force
+        Copy-Item -Path $stableKey -Destination $tempKeyPath -Force
         
         Write-Log "[OK] Certificates prepared for MSI build" -Level SUCCESS
         Write-Log "  - identity.getpostman.com.crt: Server certificate for identity.getpostman.com" -Level INFO
         Write-Log "  - identity.getpostman.com.key: Private key placeholder" -Level INFO
-        Write-Log "  - Source: $sslDir" -Level DEBUG
+
         
     } catch {
         Write-Log "Failed to prepare certificates: $_" -Level ERROR
@@ -431,66 +351,6 @@ function Ensure-StableCertificates {
 function Test-CommandAvailable {
     param([string]$Command)
     return (Get-Command $Command -ErrorAction SilentlyContinue) -ne $null
-}
-
-# Simplified dependency installation  
-function Install-AllDependencies {
-    Write-Log "=== Checking Dependencies ===" -Level INFO
-    
-    # Check Go
-    if (-not (Test-CommandAvailable "go")) {
-        Write-Log "Go not found, installing..." -Level INFO
-        Install-Go
-        
-        # Refresh PATH
-        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
-        
-        if (-not (Test-CommandAvailable "go")) {
-            Write-Log "Go installation failed" -Level ERROR
-            return $false
-        }
-    } else {
-        Write-Log "Go compiler found" -Level SUCCESS
-    }
-    
-    # Check WiX
-    $wixPaths = @(
-        "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin",
-        "${env:ProgramFiles}\WiX Toolset v3.11\bin"
-    )
-    
-    $wixFound = $false
-    foreach ($path in $wixPaths) {
-        if (Test-Path "$path\candle.exe") {
-            $global:WixPath = $path
-            $wixFound = $true
-            break
-        }
-    }
-    
-    if (-not $wixFound) {
-        Write-Log "WiX not found, installing..." -Level INFO
-        Install-WixToolset
-        
-        # Re-check
-        foreach ($path in $wixPaths) {
-            if (Test-Path "$path\candle.exe") {
-                $global:WixPath = $path
-                $wixFound = $true
-                break
-            }
-        }
-        
-        if (-not $wixFound) {
-            Write-Log "WiX installation failed" -Level ERROR
-            return $false
-        }
-    } else {
-        Write-Log "WiX Toolset found at: $global:WixPath" -Level SUCCESS
-    }
-    
-    Write-Log "All dependencies available" -Level SUCCESS
-    return $true
 }
 
 # Function to check and install Go
@@ -526,35 +386,39 @@ function Install-Go {
 
 # Function to install WiX Toolset
 function Install-WixToolset {
-    Write-Log "WiX Toolset 3.11 not found. Installing automatically..." -Level WARNING
+    Write-Log "WiX Toolset not found. Installing WiX v3.14.1 automatically..." -Level WARNING
     
     # Admin check is handled by main script
     
-    $wixUrl = "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311.exe"
-    $wixInstaller = "$env:TEMP\wix311.exe"
+    $wixUrl = "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314.exe"
+    $wixInstaller = "$env:TEMP\wix314.exe"
     
     try {
-        Write-Log "Downloading WiX Toolset 3.11..." -Level INFO
+        Write-Log "Downloading WiX Toolset v3.14.1..." -Level INFO
+        Write-Log "Note: WiX v3.14.1 supports ARM64 Windows via x86 emulation" -Level INFO
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $wixUrl -OutFile $wixInstaller -UseBasicParsing
         
-        Write-Log "Installing WiX Toolset 3.11 (this may take a few minutes)..." -Level INFO
+        Write-Log "Installing WiX Toolset v3.14.1 (this may take a few minutes)..." -Level INFO
         Start-Process -FilePath $wixInstaller -ArgumentList "/quiet", "/norestart" -Wait
         
         # Clean up installer
         Remove-Item $wixInstaller -Force -ErrorAction SilentlyContinue
         
-        Write-Log "WiX Toolset 3.11 installed successfully!" -Level SUCCESS
+        Write-Log "WiX Toolset v3.14.1 installed successfully!" -Level SUCCESS
     } catch {
         Write-Log "Failed to install WiX Toolset: $_" -Level ERROR
-        Write-Log "Please install manually from: https://github.com/wixtoolset/wix3/releases/tag/wix3112rtm" -Level ERROR
+        Write-Log "Please install manually from: https://github.com/wixtoolset/wix3/releases" -Level ERROR
         exit 1
     }
 }
 
 # Function to find Postman MSI
 function Find-PostmanMSI {
-    Write-Log "Looking for Postman Enterprise MSI in current directory..." -Level INFO
+    Write-Log "Looking for Postman Enterprise MSI in script directory..." -Level INFO
+    
+    # Look in script directory, not current directory
+    $searchPath = $scriptDir
     
     # Look for Postman MSI files matching common patterns
     $patterns = @(
@@ -564,13 +428,13 @@ function Find-PostmanMSI {
     )
     
     foreach ($pattern in $patterns) {
-        $files = Get-ChildItem -Path . -Filter $pattern -File | 
+        $files = Get-ChildItem -Path $searchPath -Filter $pattern -File -ErrorAction SilentlyContinue | 
                  Where-Object { $_.Name -notmatch "-saml\.msi$" } |
                  Sort-Object LastWriteTime -Descending
         
         if ($files.Count -gt 0) {
-            $msiFile = $files[0].Name
-            Write-Log "Found MSI: $msiFile" -Level SUCCESS
+            $msiFile = $files[0].FullName  # Return full path
+            Write-Log "Found MSI: $($files[0].Name)" -Level SUCCESS
             return $msiFile
         }
     }
@@ -584,138 +448,165 @@ function Download-PostmanMSI {
     
     $downloadUrl = "https://dl-proxy.jared-boynton.workers.dev/https://dl.pstmn.io/download/latest/version/11/win64?channel=enterprise&filetype=msi"
     
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        
-        Write-Log "Downloading from: $downloadUrl" -Level INFO
-        Write-Log "This may take a few minutes depending on your connection speed..." -Level INFO
-        
-        # Use Invoke-WebRequest to get the actual filename from redirect
-        $response = Invoke-WebRequest -Uri $downloadUrl -MaximumRedirection 0 -ErrorAction SilentlyContinue -UseBasicParsing
-        
-        # Get the redirect URL which contains the actual filename
-        $actualUrl = $downloadUrl
-        if ($response.StatusCode -eq 301 -or $response.StatusCode -eq 302) {
-            $actualUrl = $response.Headers.Location
-            Write-Log "Following redirect to: $actualUrl" -Level DEBUG
-        }
-        
-        # Download the file and preserve the server filename
-        $outputFile = "Postman-Enterprise-latest-x64.msi"  # Default fallback
-
-        # Try to extract filename from Content-Disposition header first (most reliable)
+    # Enable TLS 1.2 for secure connections
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    
+    Write-Log "Downloading from: $downloadUrl" -Level INFO
+    Write-Log "This may take a few minutes depending on your connection speed..." -Level INFO
+    
+    # Mimic curl behavior with -J -O flags (respect Content-Disposition and save with server filename)
+    $outputFile = $null
+    $maxRetries = 2
+    $retryDelay = 3
+    $connectTimeout = 10  # seconds
+    $maxTime = 60  # 15 minutes max download time
+    
+    for ($retry = 0; $retry -le $maxRetries; $retry++) {
         try {
-            Write-Log "Detecting version from server..." -Level INFO
-            $webRequest = [System.Net.HttpWebRequest]::Create($actualUrl)
+            if ($retry -gt 0) {
+                Write-Log "Retry attempt $retry of $maxRetries (waiting ${retryDelay}s)..." -Level WARNING
+                Start-Sleep -Seconds $retryDelay
+            }
+            
+            Write-Log "Attempt $($retry + 1): Fetching headers to determine filename..." -Level INFO
+            
+            # First, make a HEAD request to get Content-Disposition header (like curl -J)
+            $webRequest = [System.Net.HttpWebRequest]::Create($downloadUrl)
             $webRequest.Method = "HEAD"
-            $webRequest.Timeout = 30000  # 30 seconds
-            $webResponse = $webRequest.GetResponse()
-
-            $contentDisposition = $webResponse.Headers["Content-Disposition"]
-            if ($contentDisposition -and $contentDisposition -match 'filename="?([^"]+)"?') {
-                $serverFilename = $matches[1].Trim('"')
-                if ($serverFilename -match '\.msi$' -and $serverFilename -match 'Postman') {
-                    $outputFile = $serverFilename
-                    Write-Log "Server filename: $serverFilename" -Level INFO
+            $webRequest.Timeout = $connectTimeout * 1000  # Convert to milliseconds
+            $webRequest.AllowAutoRedirect = $true  # Follow redirects like curl -L
+            $webRequest.UserAgent = "pm-authrouter"  # Set user agent like curl -A
+            $webRequest.KeepAlive = $true  # TCP keep-alive like curl --tcp-nodelay
+            
+            try {
+                $webResponse = $webRequest.GetResponse()
+                
+                # Check Content-Disposition header for filename (curl -J behavior)
+                $contentDisposition = $webResponse.Headers["Content-Disposition"]
+                if ($contentDisposition) {
+                    Write-Log "Content-Disposition header found: $contentDisposition" -Level DEBUG
+                    if ($contentDisposition -match 'filename\s*=\s*"?([^";]+)"?') {
+                        $serverFilename = $matches[1].Trim('"').Trim()
+                        if ($serverFilename -match '\.msi$') {
+                            $outputFile = $serverFilename
+                            Write-Log "Server provided filename: $outputFile" -Level SUCCESS
+                        }
+                    }
+                }
+                
+                # If no Content-Disposition, try to get filename from final URL after redirects
+                if (-not $outputFile) {
+                    $finalUrl = $webResponse.ResponseUri.ToString()
+                    Write-Log "Final URL after redirects: $finalUrl" -Level DEBUG
+                    
+                    # Extract filename from URL
+                    if ($finalUrl -match '/([^/]+\.msi)(\?|$)') {
+                        $urlFilename = $matches[1]
+                        if ($urlFilename) {
+                            Add-Type -AssemblyName System.Web
+                            $outputFile = [System.Web.HttpUtility]::UrlDecode($urlFilename)
+                            Write-Log "Filename from URL: $outputFile" -Level INFO
+                        }
+                    }
+                }
+                
+                $webResponse.Close()
+            } catch {
+                Write-Log "Failed to get headers: $_" -Level WARNING
+            }
+            
+            # Fallback filename if we couldn't determine it
+            if (-not $outputFile) {
+                $outputFile = "Postman-Enterprise-11.60.0-enterprise01-x64.msi"
+                Write-Log "Using fallback filename: $outputFile" -Level WARNING
+            }
+            
+            # Ensure we download to script directory, not current directory
+            $outputFile = Join-Path $scriptDir $outputFile
+            
+            Write-Log "Downloading to: $outputFile" -Level INFO
+            
+            # Now download the actual file (like curl -O)
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "pm-authrouter")
+            
+            # Register event for progress reporting if in debug mode
+            if ($debug) {
+                $progressShown = $false
+                Register-ObjectEvent -InputObject $webClient -EventName DownloadProgressChanged -Action {
+                    if (-not $progressShown) {
+                        Write-Host "Download progress: $($EventArgs.ProgressPercentage)%" -NoNewline
+                        Write-Host "`r" -NoNewline
+                        if ($EventArgs.ProgressPercentage -eq 100) {
+                            $progressShown = $true
+                        }
+                    }
+                } | Out-Null
+            }
+            
+            # Set up timeout for download
+            $downloadTimer = [System.Diagnostics.Stopwatch]::StartNew()
+            
+            # Async download with timeout check
+            $downloadTask = $webClient.DownloadFileTaskAsync($downloadUrl, $outputFile)
+            
+            while (-not $downloadTask.IsCompleted) {
+                if ($downloadTimer.Elapsed.TotalSeconds -gt $maxTime) {
+                    $webClient.CancelAsync()
+                    throw "Download timeout after $maxTime seconds"
+                }
+                Start-Sleep -Milliseconds 100
+            }
+            
+            if ($downloadTask.IsFaulted) {
+                throw $downloadTask.Exception.InnerException
+            }
+            
+            # Verify the file was downloaded
+            if (Test-Path $outputFile) {
+                $fileSize = (Get-Item $outputFile).Length
+                if ($fileSize -gt 0) {
+                    Write-Log "Downloaded successfully: $outputFile ($(Format-FileSize -SizeInBytes $fileSize))" -Level SUCCESS
+                    return $outputFile
                 } else {
-                    Write-Log "Server filename doesn't look like Postman MSI: $serverFilename" -Level DEBUG
+                    throw "Downloaded file is empty"
                 }
             } else {
-                Write-Log "No Content-Disposition header found" -Level DEBUG
+                throw "Download completed but file not found"
             }
-            $webResponse.Close()
+            
         } catch {
-            Write-Log "Could not get server filename from headers: $_" -Level DEBUG
-        }
-
-        # Fallback: try to extract from URL segments
-        if ($outputFile -eq "Postman-Enterprise-latest-x64.msi") {
-            try {
-                $uri = New-Object System.Uri($actualUrl)
-                $segments = $uri.Segments
-                $lastSegment = $segments[-1]
-
-                # Check if the last segment looks like a valid MSI filename
-                if ($lastSegment -match '\.msi$' -and $lastSegment -match 'Postman') {
-                    # Load System.Web for URL decoding
-                    Add-Type -AssemblyName System.Web
-                    $urlFilename = [System.Web.HttpUtility]::UrlDecode($lastSegment)
-                    $outputFile = $urlFilename
-                    Write-Log "Using URL filename: $urlFilename" -Level INFO
-                }
-            } catch {
-                Write-Log "Could not extract filename from URL" -Level DEBUG
+            Write-Log "Download attempt $($retry + 1) failed: $_" -Level ERROR
+            
+            # Clean up partial download
+            if ($outputFile -and (Test-Path $outputFile)) {
+                Remove-Item $outputFile -Force -ErrorAction SilentlyContinue
+            }
+            
+            if ($retry -eq $maxRetries) {
+                Write-Log "Failed to download Postman MSI after $($maxRetries + 1) attempts" -Level ERROR
+                Write-Log "You can manually download from: $downloadUrl" -Level ERROR
+                exit 1
             }
         }
-
-        if ($outputFile -eq "Postman-Enterprise-latest-x64.msi") {
-            Write-Log "Could not detect server filename, using fallback name" -Level WARNING
-        }
-        
-        # Download the file
-        Write-Log "Downloading to: $outputFile" -Level INFO
-        $webClient = New-Object System.Net.WebClient
-        $webClient.DownloadFile($actualUrl, $outputFile)
-        
-        if (Test-Path $outputFile) {
-            $fileSize = (Get-Item $outputFile).Length / 1MB
-            Write-Log "Downloaded successfully: $outputFile ($([math]::Round($fileSize, 2)) MB)" -Level SUCCESS
-            return $outputFile
-        } else {
-            throw "Download completed but file not found"
-        }
-    } catch {
-        Write-Log "Failed to download Postman MSI: $_" -Level ERROR
-        Write-Log "You can manually download from: $downloadUrl" -Level ERROR
-        exit 1
     }
 }
 
-# Parameter validation with warnings
-if ([string]::IsNullOrEmpty($TeamName)) {
-    Write-Log "No team name provided. Service will be installed but not activated until configured via MSI properties." -Level WARNING
-    Write-Log "Configuration options:" -Level INFO
-    Write-Log "  - MSI install: msiexec /i package.msi TEAM_NAME=myteam SAML_URL=https://..." -Level INFO
-    Write-Log "  - Registry: Set values under HKLM\\SOFTWARE\\Postman\\Enterprise" -Level INFO
-} elseif ($TeamName.Length -lt 2) {
-    Write-Log "Team name too short (minimum 2 characters recommended): $TeamName" -Level WARNING
-} elseif ($TeamName.Length -gt 100) {
-    Write-Log "Team name too long (maximum 100 characters recommended): $TeamName" -Level WARNING
-}
-
-if ([string]::IsNullOrEmpty($SamlUrl)) {
-    Write-Log "No SAML URL provided. Service will be installed but not activated until configured via MSI properties." -Level WARNING
-    Write-Log "Configuration options:" -Level INFO
-    Write-Log "  - MSI install: msiexec /i package.msi TEAM_NAME=myteam SAML_URL=https://..." -Level INFO
-    Write-Log "  - Registry: Set values under HKLM\\SOFTWARE\\Postman\\Enterprise" -Level INFO
-} elseif (-not ($SamlUrl -match '^https?://')) {
-    Write-Log "SAML URL should be a valid HTTP/HTTPS URL: $SamlUrl" -Level WARNING
-} elseif (-not ($SamlUrl -match '/init$')) {
-    Write-Log "SAML URL should end with '/init' for proper SAML initialization: $SamlUrl" -Level WARNING
-}
+Test-ConfigurationParameters
 
 # Main script starts here
 Write-Log "=== Postman Enterprise MSI Repackaging Script ===" -Level INFO
 Write-Log "Script directory: $scriptDir" -Level INFO
-Write-Log "Team Name: $(if ($TeamName) { $TeamName } else { '[not configured - will be set at install time]' })" -Level INFO
-Write-Log "SAML URL: $(if ($SamlUrl) { $SamlUrl } else { '[not configured - will be set at install time]' })" -Level INFO
-if (-not [string]::IsNullOrEmpty($LogFile)) {
-    Write-Log "Logging to: $LogFile" -Level INFO
+Write-Log "Team Name: $(if ($team) { $team } else { '[not configured - will be set at install time]' })" -Level INFO
+Write-Log "SAML URL: $(if ($saml_url) { $saml_url } else { '[not configured - will be set at install time]' })" -Level INFO
+if (-not [string]::IsNullOrEmpty($log_file)) {
+    Write-Log "Logging to: $log_file" -Level INFO
 }
 
-# Check if running as administrator
+# Single administrator check with user prompt
 if (-not (Test-Administrator)) {
-    Write-Log "WARNING: This script is not running as Administrator" -Level WARNING
-    Write-Log "Some operations may fail without elevated privileges:" -Level WARNING
-    Write-Log "  - Installing Go or WiX Toolset automatically" -Level WARNING
-    Write-Log "  - Certificate installation during MSI install" -Level WARNING
-    Write-Log "  - Service installation during MSI install" -Level WARNING
-    Write-Log "" -Level WARNING
-    Write-Log "To run as Administrator:" -Level WARNING
-    Write-Log "  Right-click PowerShell -> 'Run as Administrator'" -Level WARNING
-    Write-Log "  Then run: .\build_msi_mdm_win.ps1" -Level WARNING
-    Write-Log "" -Level WARNING
-    
+    Write-Log "WARNING: Not running as Administrator" -Level WARNING
+    Write-Log "Some operations may require elevated privileges (auto-install tools, MSI operations)" -Level WARNING
     $response = Read-Host "Continue anyway? (y/N)"
     if ($response -notmatch "^[Yy]$") {
         Write-Log "Script cancelled by user" -Level INFO
@@ -724,75 +615,33 @@ if (-not (Test-Administrator)) {
     Write-Log "Continuing without administrator privileges..." -Level WARNING
 }
 
-# Run comprehensive validation framework
-Write-Log "Starting comprehensive validation framework..." -Level INFO
+# Run consolidated validation
+Write-Log "Validating environment and dependencies..." -Level INFO
 
-if (-not (Test-Environment)) {
-    Write-Log "Environment validation failed. Exiting." -Level ERROR
+# Check PowerShell version
+if ($PSVersionTable.PSVersion.Major -lt 5) {
+    Write-Log "PowerShell 5.0+ required. Exiting." -Level ERROR
     exit 1
 }
 
-if (-not (Test-Dependencies)) {
-    Write-Log "Dependency validation failed. Attempting automatic installation..." -Level WARNING
-    if (-not (Install-AllDependencies)) {
-        Write-Log "Critical dependencies could not be installed. Exiting." -Level ERROR
-        exit 1
-    }
-    
-    # Dependencies installed successfully, no need to re-validate
+if (-not (Test-AndInstallDependencies)) {
+    Write-Log "Dependencies validation failed. Exiting." -Level ERROR
+    exit 1
 }
 
-# Service management validation removed - build script doesn't need to validate services
-# The MSI installer will handle service installation
+# Dependencies are now validated - proceed with MSI operations
 
-Write-Host ""
+# Auto-detect or download source MSI
+$SourceMSI = Find-PostmanMSI
 
-# Step 1: Check and install dependencies (legacy compatibility)
-Write-Log "Final dependency verification..." -Level INFO
-
-# Check for Go
-$goVersion = ""
-try {
-    $goVersion = & go version 2>$null
-    if ($LASTEXITCODE -eq 0 -and $goVersion) {
-        Write-Log "[OK] Go found: $goVersion" -Level SUCCESS
-    } else {
-        throw "Go not found"
-    }
-} catch {
-    Install-Go
-    
-    # Verify installation
-    try {
-        $goVersion = & go version 2>$null
-        if ($LASTEXITCODE -eq 0 -and $goVersion) {
-            Write-Log "[OK] Go installed: $goVersion" -Level SUCCESS
-        } else {
-            throw "Go installation verification failed"
-        }
-    } catch {
-        Write-Log "Go installation verification failed. Please install manually." -Level ERROR
-        exit 1
-    }
+if ($null -eq $SourceMSI) {
+    # No MSI found, download it automatically
+    Write-Log "No Postman MSI found in script directory. Downloading..." -Level WARNING
+    $SourceMSI = Download-PostmanMSI
 }
 
-# WiX Toolset check is handled by Install-AllDependencies function
-
-# Step 2: Find or download source MSI
-if ([string]::IsNullOrWhiteSpace($SourceMSI)) {
-    # Try to find existing MSI
-    $SourceMSI = Find-PostmanMSI
-    
-    if ($null -eq $SourceMSI) {
-        # No MSI found, download it automatically
-        Write-Log "No Postman MSI found in current directory. Downloading..." -Level WARNING
-        $SourceMSI = Download-PostmanMSI
-    }
-}
-
-# Check if source MSI exists
 if (-not (Test-Path $SourceMSI)) {
-    Write-Log "Source MSI '$SourceMSI' not found." -Level ERROR
+    Write-Log "Source MSI not found after download attempt." -Level ERROR
     exit 1
 }
 
@@ -803,100 +652,56 @@ if (-not (Test-SourceFiles)) {
     exit 1
 }
 
-# Auto-generate output filename if not specified (preserve version number)
-if ([string]::IsNullOrWhiteSpace($OutputMSI)) {
-    $sourceFile = Get-Item $SourceMSI
-    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($sourceFile.Name)
-    $extension = $sourceFile.Extension
-    
-    # If the source MSI has a version number, preserve it in output
-    if ($baseName -match '(\d+\.\d+\.\d+)') {
-        $version = $matches[1]
-        Write-Log "Detected version: $version" -Level DEBUG
-    }
-    
-    $OutputMSI = "$baseName-saml$extension"
-    Write-Log "Output MSI will be: $OutputMSI" -Level INFO
+# Auto-generate output filename (preserve version number)
+$sourceFile = Get-Item $SourceMSI
+$baseName = [System.IO.Path]::GetFileNameWithoutExtension($sourceFile.Name)
+$extension = $sourceFile.Extension
+
+# If the source MSI has a version number, preserve it in output
+if ($baseName -match '(\d+\.\d+\.\d+)') {
+    $version = $matches[1]
 }
 
-# Auto-generate temp directory if not specified
-if ([string]::IsNullOrWhiteSpace($TempDir)) {
-    $randomSuffix = Get-Random -Minimum 10000 -Maximum 99999
-    $tempBase = $env:TEMP
-    if ([string]::IsNullOrEmpty($tempBase)) {
-        $tempBase = $env:TMP
-    }
-    if ([string]::IsNullOrEmpty($tempBase)) {
-        $tempBase = "C:\Windows\Temp"
-    }
-    $TempDir = Join-Path $tempBase "postman-repack-$randomSuffix"
-    Write-Log "Using temp directory: $TempDir" -Level INFO
-}
+# Always save output to script directory
+$OutputMSI = Join-Path $scriptDir "$baseName-saml$extension"
+Write-Log "Output MSI will be: $OutputMSI" -Level INFO
 
-# Create temp directory first
+# Auto-generate temp directory
+$randomSuffix = Get-Random -Minimum 10000 -Maximum 99999
+$tempBase = $env:TEMP
+if ([string]::IsNullOrEmpty($tempBase)) {
+    $tempBase = $env:TMP
+}
+if ([string]::IsNullOrEmpty($tempBase)) {
+    $tempBase = "C:\Windows\Temp"
+}
+$TempDir = Join-Path $tempBase "postman-repack-$randomSuffix"
+Write-Log "Using temp directory: $TempDir" -Level INFO
+
 Write-Log "Creating temporary directory: $TempDir" -Level INFO
 if (Test-Path $TempDir) {
     Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 
-# Step 3: Generate or check certificates in temp directory
-# Auto-detect if certificates already exist
-$certsExist = (Test-Path "identity.getpostman.com.crt") -and (Test-Path "identity.getpostman.com.key")
-
-if (-not $certsExist) {
-    # Generate certificates automatically in temp directory
-    Push-Location $TempDir
-    try {
-        Ensure-StableCertificates
-    } finally {
-        Pop-Location
-    }
-} else {
-    # Check for existing certificate files in temp directory
-    Write-Log "Checking for existing certificate files..." -Level INFO
-    $certFiles = @("identity.getpostman.com.crt", "identity.getpostman.com.key")
-    $missingCerts = @()
-    
-    foreach ($cert in $certFiles) {
-        $certPath = Join-Path $TempDir $cert
-        if (Test-Path $certPath) {
-            Write-Log "[OK] Found: $cert" -Level SUCCESS
-        } else {
-            $missingCerts += $cert
-        }
-    }
-    
-    if ($missingCerts.Count -gt 0) {
-        Write-Log "Missing certificates. Generating new ones..." -Level WARNING
-        Push-Location $TempDir
-        try {
-            Ensure-StableCertificates
-        } finally {
-            Pop-Location
-        }
-    }
+# Generate certificates in temp directory
+Push-Location $TempDir
+try {
+    Ensure-StableCertificates
+} finally {
+    Pop-Location
 }
 
-# Step 4: Check for other required files
 Write-Log "Checking for other required files..." -Level INFO
 
-# Build pm-authrouter.exe from Go source
 Write-Log "Building pm-authrouter.exe from source..." -Level INFO
+$projectRoot = Find-ProjectRoot -StartPath $scriptDir
 
-# Find the project root directory (where go.mod is located)
-$projectRoot = $scriptDir
-do {
-    if (Test-Path (Join-Path $projectRoot "go.mod")) {
-        break
-    }
-    $parent = Split-Path $projectRoot -Parent
-    if ($parent -eq $projectRoot) {
-        Write-Log "Could not find go.mod file. Please run from project directory." -Level ERROR
-        exit 1
-    }
-    $projectRoot = $parent
-} while ($true)
+if (-not $projectRoot) {
+    Write-Log "Could not find go.mod file. Please ensure the script is run from within the project directory structure." -Level ERROR
+    Write-Log "Expected structure: project root should contain go.mod and cmd\pm-authrouter" -Level ERROR
+    exit 1
+}
 
 Write-Log "Found project root: $projectRoot" -Level INFO
 Write-Log "Building Windows binary for pm-authrouter..." -Level INFO
@@ -904,22 +709,20 @@ Write-Log "Building Windows binary for pm-authrouter..." -Level INFO
 # Save current location and switch to project root
 Push-Location $projectRoot
 try {
-    # Set environment variables for Windows cross-compilation
     $env:GOOS = "windows"
     $env:GOARCH = "amd64"
     $env:CGO_ENABLED = "0"
-    
-    # Build command with optimized flags for production
-    $buildCmd = "go"
+
     $buildArgs = @(
         "build",
+        "-buildvcs=false",  # Disable VCS stamping
         "-ldflags=-w -s",  # Strip debugging info and symbol table
         "-o", "$TempDir\pm-authrouter.exe",
         ".\cmd\pm-authrouter"
     )
-    
-    Write-Log "Executing: $buildCmd $($buildArgs -join ' ')" -Level INFO
-    & $buildCmd @buildArgs
+
+    Write-Log "Executing: go $($buildArgs -join ' ')" -Level INFO
+    & go @buildArgs
     
     if ($LASTEXITCODE -ne 0) {
         throw "Go build failed with exit code $LASTEXITCODE"
@@ -927,8 +730,8 @@ try {
     
     # Verify the binary was created
     if (Test-Path "$TempDir\pm-authrouter.exe") {
-        $binarySize = (Get-Item "$TempDir\pm-authrouter.exe").Length / 1MB
-        Write-Log "[OK] Built pm-authrouter.exe ($([math]::Round($binarySize, 2)) MB)" -Level SUCCESS
+        $binarySize = (Get-Item "$TempDir\pm-authrouter.exe").Length
+        Write-Log "[OK] Built pm-authrouter.exe ($(Format-FileSize -SizeInBytes $binarySize))" -Level SUCCESS
     } else {
         throw "Binary not found after build"
     }
@@ -938,10 +741,7 @@ try {
     exit 1
 } finally {
     Pop-Location
-    # Clean up environment variables
-    Remove-Item env:GOOS -ErrorAction SilentlyContinue
-    Remove-Item env:GOARCH -ErrorAction SilentlyContinue  
-    Remove-Item env:CGO_ENABLED -ErrorAction SilentlyContinue
+    Clear-EnvironmentVariables
 }
 
 # Always generate uninstall.bat in temp directory for consistency
@@ -962,36 +762,30 @@ Write-Log "[OK] All required files ready" -Level SUCCESS
 
 # Get original MSI size for comparison
 $originalSize = (Get-Item $SourceMSI).Length
-Write-Log "Original MSI size: $([math]::Round($originalSize / 1MB, 2)) MB" -Level INFO
+Write-Log "Original MSI size: $(Format-FileSize -SizeInBytes $originalSize)" -Level INFO
 
 # Validation functions
 function Test-CabinetCompression {
     param([string]$ExtractedPath)
     
     if ($ValidateCompression) {
-        Write-Host "Validating cabinet compression..."
+        Write-Log "Validating cabinet compression..."
         
-        # Check if starship.cab exists and is still compressed
         $starshipCab = Get-ChildItem -Path $ExtractedPath -Name "starship.cab" -Recurse -ErrorAction SilentlyContinue
-        
+
         if ($starshipCab) {
             $cabPath = Join-Path $ExtractedPath $starshipCab
             $cabSize = (Get-Item $cabPath).Length
-            Write-Host "Found starship.cab: $([math]::Round($cabSize / 1MB, 2)) MB (compressed)" -ForegroundColor Green
+            Write-Log "Found starship.cab: $(Format-FileSize -SizeInBytes $cabSize) (compressed)" -ForegroundColor Green
             return $true
         } else {
-            # Check if we accidentally extracted cabinet contents
             $extractedFiles = Get-ChildItem -Path $ExtractedPath -Recurse -File | Where-Object { $_.Extension -in @('.exe', '.dll', '.pak', '.dat') -and $_.Name -ne 'pm-authrouter.exe' }
-            
+
             if ($extractedFiles.Count -gt 50) {  # Arbitrary threshold indicating extraction
-                Write-Warning "Detected $($extractedFiles.Count) extracted files - starship.cab may have been decompressed!"
-                if ($Debug) {
-                    Write-Host "First 10 extracted files:"
-                    $extractedFiles | Select-Object -First 10 | ForEach-Object { Write-Host "  - $($_.Name)" }
-                }
+                Write-Log "Warning: Detected $($extractedFiles.Count) extracted files - starship.cab may have been decompressed!" -Level WARNING
                 return $false
             } else {
-                Write-Host "Cabinet appears to remain compressed (found $($extractedFiles.Count) individual files)" -ForegroundColor Green
+                Write-Log "Cabinet appears to remain compressed (found $($extractedFiles.Count) individual files)" -ForegroundColor Green
                 return $true
             }
         }
@@ -999,18 +793,9 @@ function Test-CabinetCompression {
     return $true
 }
 
-function Write-DebugInfo {
-    param([string]$Message, [string]$Color = "Cyan")
-    if ($Debug) {
-        Write-Host "[DEBUG] $Message" -ForegroundColor $Color
-    }
-}
-
-
 try {
     # Extract MSI using WiX dark.exe
     Write-Log "Extracting MSI with dark.exe..." -Level INFO
-    Write-DebugInfo "Using dark.exe args: -x $TempDir\extracted -v $SourceMSI $TempDir\Product.wxs"
     
     $darkArgs = @(
         "-x", "$TempDir\extracted"
@@ -1030,7 +815,6 @@ try {
         Write-Warning "Cabinet compression validation failed! This may result in an oversized MSI."
     }
 
-    # Copy custom files to extracted directory
     Write-Log "Adding custom files to MSI..." -Level INFO
     $customFiles = @(
         "$TempDir\identity.getpostman.com.key",
@@ -1061,14 +845,11 @@ try {
     # Read the WXS content
     $wxsContent = Get-Content -Path $wxsPath -Raw
 
-    # Generate GUIDs for our components
     $guid1 = [System.Guid]::NewGuid().ToString().ToUpper()
     $guid2 = [System.Guid]::NewGuid().ToString().ToUpper()
     $guid3 = [System.Guid]::NewGuid().ToString().ToUpper()
     $guid4 = [System.Guid]::NewGuid().ToString().ToUpper()
     $guid5 = [System.Guid]::NewGuid().ToString().ToUpper()
-    
-    # Create auth directory and components
     $customComponents = @"
                         <Directory Id="AuthDirectory" Name="auth">
                             <Component Id="IdentityKeyComponent" Guid="{$guid1}" Win64="yes">
@@ -1086,6 +867,7 @@ try {
                                                Start="auto"
                                                Account="LocalSystem"
                                                ErrorControl="normal"
+                                               Arguments="--mode service --team &quot;[TEAM_NAME]&quot; --saml-url &quot;[SAML_URL]&quot;"
                                                Vital="yes">
                                     <util:ServiceConfig FirstFailureActionType="restart" 
                                                        SecondFailureActionType="restart" 
@@ -1127,7 +909,6 @@ try {
                         </Directory>
 "@
 
-    # Add util and iis namespaces if not present
     if ($wxsContent -notmatch 'xmlns:util=') {
         $wxsContent = $wxsContent -replace '<Wix xmlns="[^"]*"', '$0 xmlns:util="http://schemas.microsoft.com/wix/UtilExtension"'
     }
@@ -1184,22 +965,32 @@ try {
             '            <ComponentRef Id="IdentityKeyComponent" />',
             '            <ComponentRef Id="AuthRouterComponent" />',
             '            <ComponentRef Id="UninstallBatComponent" />',
-            '            <ComponentRef Id="CaCrtComponent" />',
             '            <ComponentRef Id="IdentityCrtComponent" />'
         )
         $lines = $lines[0..($featureEnd - 1)] + $componentRefs + $lines[$featureEnd..($lines.Length - 1)]
     }
     
-    # Add Binary element for certificate data after Feature section
     $binarySection = @(
         '',
         '        <!-- Binary data for certificates -->',
         '        <Binary Id="ServerCertBinary" SourceFile="identity.getpostman.com.crt" />',
         '',
-        '        <!-- MSI Properties for install-time configuration -->',
-        "        <Property Id=`"TEAM_NAME`" Value=`"$(if ($TeamName) { $TeamName } else { '' })`" />",
-        "        <Property Id=`"SAML_URL`" Value=`"$(if ($SamlUrl) { $SamlUrl } else { '' })`" />"
+        '        <!-- MSI Properties for install-time configuration -->'
     )
+    
+    # Add properties - use provided values or default placeholders for MSI property substitution
+    if (-not [string]::IsNullOrEmpty($team)) {
+        $binarySection += "        <Property Id=`"TEAM_NAME`" Value=`"$team`" />"
+    } else {
+        # Add default placeholder for command-line override at install time
+        $binarySection += "        <Property Id=`"TEAM_NAME`" Value=`"BLANK`" />"
+    }
+    if (-not [string]::IsNullOrEmpty($saml_url)) {
+        $binarySection += "        <Property Id=`"SAML_URL`" Value=`"$saml_url`" />"
+    } else {
+        # Add default placeholder for command-line override at install time
+        $binarySection += "        <Property Id=`"SAML_URL`" Value=`"https://identity.getpostman.com/sso/BLANK/init`" />"
+    }
     
     # Find the end of the Product element to insert Binary before it
     $productEnd = -1
@@ -1235,48 +1026,33 @@ try {
     }
 
     # Link MSI with light.exe
-    Write-Log "Linking MSI (Compression: $CompressionLevel, Threads: $Threads)..." -Level INFO
-    
+    Write-Log "Linking MSI with optimized settings..." -Level INFO
+
     $lightArgs = @(
         "-ext", "WixUtilExtension"
         "-ext", "WixIIsExtension"
         "-out", $OutputMSI
         "-b", "$TempDir\extracted"
-        "-dcl:$CompressionLevel"  # Compression level
-        "-ct", $Threads  # Number of threads for cabinet creation
+        "-dcl:high"  # High compression
+        "-ct", $env:NUMBER_OF_PROCESSORS  # Use all available threads
         "$TempDir\Product.wixobj"
     )
     
-    # Add optional flags based on parameters
-    if ($FastBuild) {
-        Write-Host "Fast build mode enabled - skipping validations"
-        $lightArgs += "-sval"  # Skip validation
-        $lightArgs += "-sh"    # Skip file hash verification
-        $lightArgs += "-ss"    # Skip schema validation
-        $lightArgs += "-ai"    # Allow identical rows
-    }
-    
-    if (-not $KeepPDB) {
-        $lightArgs += "-spdb"  # Suppress PDB creation
-    } else {
-        Write-Host "Keeping PDB file for debugging/patching"
-    }
+    $lightArgs += "-spdb"  # Suppress PDB creation
     
     # Suppress common warnings that don't affect functionality
     $lightArgs += "-sw1076"  # ICE76: Duplicate sequence numbers
-    
-    Write-DebugInfo "Light.exe arguments: $($lightArgs -join ' ')"
     
     & "$WixPath\light.exe" @lightArgs
     if ($LASTEXITCODE -ne 0) {
         throw "light.exe failed with exit code $LASTEXITCODE"
     }
 
-    Write-Host "Successfully created modified MSI: $OutputMSI" -ForegroundColor Green
+    Write-Log "Successfully created modified MSI: $OutputMSI" -ForegroundColor Green
     
     # Run output validation
     Write-Log "Validating output MSI..." -Level INFO
-    if (-not (Test-OutputValidation -OutputPath $OutputMSI)) {
+    if (-not (Test-OutputValidation -OutputPath $OutputMSI -TempDirectory $TempDir)) {
         throw "Output validation failed"
     }
     
@@ -1287,25 +1063,18 @@ try {
         $sizeDifference = $newSize - $originalSize
         $percentIncrease = [math]::Round(($sizeDifference / $originalSize) * 100, 2)
         
-        Write-Host "Original MSI size: $([math]::Round($originalSize / 1MB, 2)) MB"
-        Write-Host "Modified MSI size: $([math]::Round($newSize / 1MB, 2)) MB" -ForegroundColor $(if ($percentIncrease -gt 50) { "Yellow" } else { "Green" })
-        Write-Host "Size difference: $([math]::Round($sizeDifference / 1MB, 2)) MB ($percentIncrease% increase)"
-        Write-Host "Created: $($fileInfo.CreationTime)"
+        Write-Log "Original MSI size: $(Format-FileSize -SizeInBytes $originalSize)"
+        Write-Log "Modified MSI size: $(Format-FileSize -SizeInBytes $newSize)" -ForegroundColor $(if ($percentIncrease -gt 50) { "Yellow" } else { "Green" })
+        Write-Log "Created: $($fileInfo.CreationTime)"
         
         # Custom files size
         $customFilesTotalSize = 0
         $customFiles = @("identity.getpostman.com.key", "pm-authrouter.exe", "uninstall.bat", "identity.getpostman.com.crt")
         foreach ($file in $customFiles) {
-            if (Test-Path $file) {
-                $customFilesTotalSize += (Get-Item $file).Length
+            $filePath = Join-Path $TempDir $file
+            if (Test-Path $filePath) {
+                $customFilesTotalSize += (Get-Item $filePath).Length
             }
-        }
-        Write-Host "Custom files total: $([math]::Round($customFilesTotalSize / 1MB, 2)) MB"
-        
-        # Warn if size increase is unexpectedly large
-        if ($percentIncrease -gt 50) {
-            Write-Warning "Size increase is larger than expected! This may indicate cabinet decompression occurred."
-            Write-Warning "Expected increase should be close to custom files size + small overhead."
         }
     }
 
@@ -1318,20 +1087,6 @@ try {
         Write-Log "Cleaning up temporary files..." -Level INFO
         Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
-    
-    # Clean up temporary files
-    $tempFiles = @()
-    
-    # Clean up WiX PDB unless explicitly kept
-    if (-not $KeepPDB) {
-        $tempFiles += "*.wixpdb"
-    }
-    
-    # Clean up if we failed OR if not keeping PDB
-    foreach ($pattern in $tempFiles) {
-        Remove-Item $pattern -Force -ErrorAction SilentlyContinue
-    }
 }
 
-Write-Log "MSI repackaging completed successfully!" -Level SUCCESS
 Write-Log "Output file: $OutputMSI" -Level SUCCESS

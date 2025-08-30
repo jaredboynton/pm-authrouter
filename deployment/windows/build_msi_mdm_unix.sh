@@ -64,11 +64,10 @@ SAML_URL="${SAML_URL:-}"
 POSTMAN_MSI_URL="${POSTMAN_MSI_URL:-https://dl-proxy.jared-boynton.workers.dev/https://dl.pstmn.io/download/latest/version/11/win64?channel=enterprise&filetype=msi}"
 DEBUG_MODE="${DEBUG_MODE:-0}"
 
-# Certificate configuration
+# Certificate configuration (automatic)
 CERT_COUNTRY="${CERT_COUNTRY:-US}"
 CERT_STATE="${CERT_STATE:-CA}"
 CERT_CITY="${CERT_CITY:-San Francisco}"
-CERT_ORG="${CERT_ORG:-Postdot Technologies, Inc}"
 
 # Cross-platform file size function
 get_file_size() {
@@ -190,12 +189,7 @@ while [[ $# -gt 0 ]]; do
             log "INFO" "Debug mode enabled"
             shift
             ;;
-        --cert-org)
-            [[ -z "${2:-}" ]] && { log "ERROR" "--cert-org requires a value"; exit 1; }
-            CERT_ORG="$2"
-            log "INFO" "Set certificate org: $CERT_ORG"
-            shift 2
-            ;;
+
         --help)
             cat << EOF
 Usage: $SCRIPT_NAME [OPTIONS]
@@ -207,10 +201,7 @@ Build Options (OPTIONAL - service will be installed but requires configuration):
                             (optional - can be set via MSI properties at install time)
   --saml-url <url>           Set SAML initialization URL (should end with /init)
                             (optional - can be set via MSI properties at install time)
-  
-Certificate Options:
-  --cert-org <name>          Certificate organization (default: Postman)
-  
+
 Build Control:
   --debug                   Enable debug logging
   
@@ -309,41 +300,63 @@ extract_original_msi() {
         
         log "INFO" "Original MSI not found, downloading..."
 
-        # Get actual filename from server (includes version) like macOS script does
-        log "INFO" "Detecting version from server..."
-        local server_filename=$(curl -sI --connect-timeout 10 --max-time 30 "$POSTMAN_MSI_URL" 2>/dev/null | \
-            grep -i content-disposition | \
-            sed 's/.*filename=\([^;]*\).*/\1/' | \
-            tr -d '\r"')
+        # Change to script directory for download (like macOS script)
+        local original_dir=$(pwd)
+        cd "$SCRIPT_DIR" || {
+            validation_error "MSI_ACQUISITION" "Failed to change to script directory: $SCRIPT_DIR"
+        }
 
-        if [[ -n "$server_filename" ]]; then
-            original_msi="$SCRIPT_DIR/$server_filename"
-            log "INFO" "Server filename: $server_filename"
-        else
-            # Fallback to generic name if server doesn't provide filename
-            original_msi="$SCRIPT_DIR/Postman-Enterprise-latest-x64.msi"
-            log "WARN" "Could not detect server filename, using fallback name"
-        fi
-        
-        # Network resilience with basic retry
+        # Network resilience with retry logic
         local download_attempts=0
         local max_attempts=3
-        
-        while [[ $download_attempts -lt $max_attempts ]]; do
-            download_attempts=$((download_attempts + 1))
-            log "INFO" "Download attempt $download_attempts/$max_attempts to: $(basename "$original_msi")"
+        local download_success=false
 
-            if log_cmd curl -L --connect-timeout 30 --max-time 300 -o "$original_msi" "$POSTMAN_MSI_URL"; then
-                log "INFO" "MSI downloaded successfully: $(basename "$original_msi")"
-                break
+        while [[ $download_attempts -lt $max_attempts ]] && [[ "$download_success" == "false" ]]; do
+            download_attempts=$((download_attempts + 1))
+            log "INFO" "Download attempt $download_attempts/$max_attempts..."
+            log "DEBUG" "Downloading from: $POSTMAN_MSI_URL"
+
+            # Use -J and -O to respect Content-Disposition header for filename
+            # Note: Cannot use -C (resume) with -J (remote-header-name)
+            local curl_opts=(-L --tcp-nodelay --connect-timeout 10 --max-time 60 --retry 2 --retry-delay 3 --retry-max-time 60 -A "pm-authrouter" -J -O)
+            if [[ "$DEBUG_MODE" == "1" ]]; then
+                # Debug mode: verbose output, show progress
+                curl_opts+=(--verbose --progress-bar)
+                log "DEBUG" "Running curl with debug options: ${curl_opts[*]} \"$POSTMAN_MSI_URL\""
             else
-                log "WARN" "Download attempt $download_attempts failed"
+                # Normal mode: silent with error reporting
+                curl_opts+=(--silent --show-error)
+            fi
+
+            log "INFO" "Starting curl download (attempt $download_attempts/$max_attempts)..."
+            if curl "${curl_opts[@]}" "$POSTMAN_MSI_URL"; then
+                download_success=true
+                # Find the downloaded file (should be the newest .msi file)
+                local actual_filename=$(ls -t *.msi 2>/dev/null | head -1)
+                if [[ -n "$actual_filename" ]] && [[ -f "$actual_filename" ]]; then
+                    local file_size=$(get_file_size "$actual_filename")
+                    local file_size_mb=$(( file_size / 1024 / 1024 ))
+                    log "SUCCESS" "Download completed: $actual_filename (${file_size_mb}MB / $file_size bytes)"
+                    log "INFO" "Downloaded to: $SCRIPT_DIR/$actual_filename"
+                    # Set original_msi to point to actual downloaded file
+                    original_msi="$SCRIPT_DIR/$actual_filename"
+                else
+                    log "ERROR" "Download appeared successful but no .msi file found"
+                    download_success=false
+                fi
+            else
+                local curl_exit=$?
+                log "WARN" "Download attempt $download_attempts failed (curl exit code: $curl_exit)"
+                log "DEBUG" "Failed download URL: $POSTMAN_MSI_URL"
                 if [[ $download_attempts -eq $max_attempts ]]; then
                     validation_error "MSI_ACQUISITION" "Failed to download MSI after $max_attempts attempts"
                 fi
                 sleep 5
             fi
         done
+
+        # Return to original directory
+        cd "$original_dir" || log "WARN" "Failed to return to original directory: $original_dir"
     fi
     
     log "INFO" "Using MSI: $(basename "$original_msi")"
@@ -418,7 +431,7 @@ build_authrouter_components() {
             log "INFO" "Generating certificates inline..."
             openssl genrsa -out "$SSL_DIR/identity.getpostman.com.key" 2048 2>/dev/null
             openssl req -new -key "$SSL_DIR/identity.getpostman.com.key" -out "$SSL_DIR/temp.csr" \
-                -subj "/C=US/O=$CERT_ORG/CN=identity.getpostman.com" 2>/dev/null
+                -subj "/C=US/O=Postdot Technologies, Inc/CN=identity.getpostman.com" 2>/dev/null
             
             cat > "$SSL_DIR/temp.ext" <<EOF
 authorityKeyIdentifier=keyid,issuer
